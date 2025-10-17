@@ -1,12 +1,24 @@
 import { invoke } from '@tauri-apps/api/core';
-import StartGame from './game/main';
+import Phaser from 'phaser';
+import { Game as SnakeGame } from './game/scenes/Game';
 
 document.addEventListener('DOMContentLoaded', async () => {
+    try {
+        await invoke('greet', { name: 'Phaser Game' });
+    } catch (error) {
+        console.warn('Unable to invoke greet command:', error);
+    }
 
-    // Call the Rust function from Tauri
-    // This is just an example, you can remove it if not needed
-    invoke('greet', { name: 'Phaser Game' });
+    const config: Phaser.Types.Core.GameConfig = {
+        type: Phaser.AUTO,
+        width: 800,
+        height: 600,
+        parent: 'game-container',
+        backgroundColor: '#101018',
+        pixelArt: true,
+        roundPixels: true,
+        scene: [SnakeGame]
+    };
 
-    StartGame('game-container');
-
+    new Phaser.Game(config);
 });
