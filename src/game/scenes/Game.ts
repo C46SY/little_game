@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { CELL_SIZE, GAME_HEIGHT, GAME_WIDTH, GRID_HEIGHT, GRID_WIDTH } from '../constants';
+import { CELL_SIZE, GAME_HEIGHT, GAME_WIDTH, GRID_HEIGHT, GRID_WIDTH, PLAYFIELD_HEIGHT, PLAYFIELD_WIDTH } from '../constants';
 
 type Cell = { x: number; y: number };
 type Bean = { cell: Cell; value: number };
@@ -10,7 +10,7 @@ enum GameState {
     Win = 'win'
 }
 
-const STEP_DELAY = 100; // milliseconds, 10 ticks per second
+const STEP_DELAY = 160; // milliseconds, slower pace for easier play
 const INITIAL_LENGTH = 3;
 const BEST_SCORE_KEY = 'snake-best-score';
 const INITIAL_BEAN_COUNT = 3;
@@ -22,6 +22,10 @@ export class Game extends Phaser.Scene {
     private scoreText!: Phaser.GameObjects.Text;
     private gameOverText!: Phaser.GameObjects.Text;
     private stepEvent?: Phaser.Time.TimerEvent;
+    private readonly playfieldOffset = {
+        x: (PLAYFIELD_WIDTH - GAME_WIDTH) / 2,
+        y: (PLAYFIELD_HEIGHT - GAME_HEIGHT) / 2
+    };
 
     private snake: Cell[] = [];
     private direction: Cell = { x: 1, y: 0 };
@@ -47,7 +51,7 @@ export class Game extends Phaser.Scene {
     }
 
     public create(): void {
-        this.add.image(GAME_WIDTH / 2, GAME_HEIGHT / 2, 'playfield').setDepth(0);
+        this.add.image(PLAYFIELD_WIDTH / 2, PLAYFIELD_HEIGHT / 2, 'playfield').setDepth(0);
 
         this.scoreText = this.add.text(24, 24, '', {
             fontFamily: '"Fredoka", "Comic Sans MS", "Arial Rounded MT Bold", sans-serif',
@@ -58,15 +62,21 @@ export class Game extends Phaser.Scene {
         this.scoreText.setPadding(18, 12, 18, 12);
         this.scoreText.setBackgroundColor('rgba(255,255,255,0.85)');
         this.scoreText.setShadow(2, 2, 'rgba(154, 208, 245, 0.6)', 0, true, true);
+        this.scoreText.setOrigin(0.5, 0);
         this.scoreText.setDepth(5);
 
-        this.gameOverText = this.add.text(GAME_WIDTH / 2, GAME_HEIGHT / 2, 'Game Over\nPress SPACE to restart', {
+        this.gameOverText = this.add.text(
+            this.playfieldOffset.x + GAME_WIDTH / 2,
+            this.playfieldOffset.y + GAME_HEIGHT / 2,
+            'Game Over\nPress SPACE to restart',
+            {
             fontFamily: '"Fredoka", "Comic Sans MS", "Arial Rounded MT Bold", sans-serif',
             fontSize: '48px',
             color: '#ff6b81',
             align: 'center',
             backgroundColor: 'rgba(255,255,255,0.9)'
-        });
+        }
+        );
         this.gameOverText.setOrigin(0.5);
         this.gameOverText.setDepth(6);
         this.gameOverText.setStroke('#ffe3e3', 6);
@@ -124,6 +134,7 @@ export class Game extends Phaser.Scene {
 
         this.refillBeans();
         this.updateScoreText();
+        this.updateLayout();
         this.draw();
     }
 
@@ -274,6 +285,7 @@ export class Game extends Phaser.Scene {
             this.saveBestScore(this.bestScore);
         }
         this.updateScoreText();
+        this.updateLayout();
     }
 
     private handleWin(): void {
@@ -288,6 +300,7 @@ export class Game extends Phaser.Scene {
             this.saveBestScore(this.bestScore);
         }
         this.updateScoreText();
+        this.updateLayout();
     }
 
     private refillBeans(): void {
@@ -345,7 +358,10 @@ export class Game extends Phaser.Scene {
             const segment = this.snake[i];
             const sprite = this.getSnakeSprite(i);
             sprite.setTexture(i === 0 ? 'snake-head' : 'snake-body');
-            sprite.setPosition(segment.x * CELL_SIZE + CELL_SIZE / 2, segment.y * CELL_SIZE + CELL_SIZE / 2);
+            sprite.setPosition(
+                this.playfieldOffset.x + segment.x * CELL_SIZE + CELL_SIZE / 2,
+                this.playfieldOffset.y + segment.y * CELL_SIZE + CELL_SIZE / 2
+            );
             sprite.setVisible(true);
             sprite.setActive(true);
         }
@@ -361,8 +377,8 @@ export class Game extends Phaser.Scene {
         for (let i = 0; i < this.beans.length; i += 1) {
             const bean = this.beans[i];
             const sprite = this.getBeanSprite(i);
-            const centerX = bean.cell.x * CELL_SIZE + CELL_SIZE / 2;
-            const centerY = bean.cell.y * CELL_SIZE + CELL_SIZE / 2;
+            const centerX = this.playfieldOffset.x + bean.cell.x * CELL_SIZE + CELL_SIZE / 2;
+            const centerY = this.playfieldOffset.y + bean.cell.y * CELL_SIZE + CELL_SIZE / 2;
             sprite.setPosition(centerX, centerY);
             sprite.setVisible(true);
             sprite.setActive(true);
@@ -470,6 +486,22 @@ export class Game extends Phaser.Scene {
             ? `Next: ${this.nextValue} / ${this.maxValue}`
             : `Completed: ${this.maxValue} / ${this.maxValue}`;
         this.scoreText.setText(`Score: ${this.score} (Best: ${this.bestScore})\n${progress}`);
+        this.layoutScoreText();
+    }
+
+    private updateLayout(): void {
+        this.layoutScoreText();
+        this.gameOverText.setPosition(
+            this.playfieldOffset.x + GAME_WIDTH / 2,
+            this.playfieldOffset.y + GAME_HEIGHT / 2
+        );
+    }
+
+    private layoutScoreText(): void {
+        const centerX = this.playfieldOffset.x + GAME_WIDTH / 2;
+        const desiredY = this.playfieldOffset.y - this.scoreText.height - 24;
+        const clampedY = Math.max(16, desiredY);
+        this.scoreText.setPosition(centerX, clampedY);
     }
 
     private loadBestScore(): number {
