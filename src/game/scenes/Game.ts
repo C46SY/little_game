@@ -1,10 +1,12 @@
 import Phaser from 'phaser';
 
 type Cell = { x: number; y: number };
+type Bean = { cell: Cell; value: number };
 
 enum GameState {
     Running = 'running',
-    Dead = 'dead'
+    Dead = 'dead',
+    Win = 'win'
 }
 
 const CELL_SIZE = 32;
@@ -18,6 +20,7 @@ const BEST_SCORE_KEY = 'snake-best-score';
 const HEAD_COLOR = 0x7af077;
 const BODY_COLOR = 0x3a9b3a;
 const FOOD_COLOR = 0xf04e4e;
+const INITIAL_BEAN_COUNT = 3;
 
 export class Game extends Phaser.Scene {
     private graphics!: Phaser.GameObjects.Graphics;
@@ -29,7 +32,11 @@ export class Game extends Phaser.Scene {
     private direction: Cell = { x: 1, y: 0 };
     private directionQueue: Cell[] = [];
     private pendingGrowth = 0;
-    private food: Cell = { x: 0, y: 0 };
+    private beans: Bean[] = [];
+    private nextValue = 1;
+    private nextSpawnValue = 1;
+    private maxValue = 20;
+    private beanTexts: Phaser.GameObjects.Text[] = [];
     private occupancy: Set<string> = new Set();
     private score = 0;
     private bestScore = 0;
@@ -70,6 +77,7 @@ export class Game extends Phaser.Scene {
         this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
             keyboard?.off('keydown', this.handleKeyDown, this);
             this.stepEvent?.destroy();
+            this.clearBeanTexts();
         });
 
         this.resetGame();
@@ -91,6 +99,11 @@ export class Game extends Phaser.Scene {
         this.pendingGrowth = 0;
         this.score = 0;
         this.direction = { x: 1, y: 0 };
+        this.beans = [];
+        this.clearBeanTexts();
+        this.nextValue = 1;
+        this.nextSpawnValue = 1;
+        this.maxValue = 20;
 
         const startX = Math.floor(GRID_WIDTH / 2);
         const startY = Math.floor(GRID_HEIGHT / 2);
@@ -101,14 +114,14 @@ export class Game extends Phaser.Scene {
             this.occupancy.add(this.cellKey(segment));
         }
 
-        this.spawnFood();
+        this.refillBeans();
         this.updateScoreText();
         this.draw();
     }
 
     private handleKeyDown(event: KeyboardEvent): void {
         if (event.code === 'Space') {
-            if (this.state === GameState.Dead) {
+            if (this.state === GameState.Dead || this.state === GameState.Win) {
                 this.resetGame();
             }
             return;
@@ -175,31 +188,51 @@ export class Game extends Phaser.Scene {
         }
 
         const nextKey = this.cellKey(nextHead);
+        const beanIndex = this.findBeanIndex(nextHead);
         const tail = this.snake[this.snake.length - 1];
         const willRemoveTail = this.pendingGrowth === 0;
         const tailKey = this.cellKey(tail);
 
         if (this.occupancy.has(nextKey)) {
             const movingIntoTail = willRemoveTail && nextKey === tailKey;
-            if (!movingIntoTail) {
+            const movingIntoBean = beanIndex !== -1;
+            if (!movingIntoTail && !movingIntoBean) {
                 this.endGame();
                 return;
             }
         }
 
+        if (beanIndex !== -1) {
+            const bean = this.beans[beanIndex];
+            if (bean.value !== this.nextValue) {
+                this.endGame('顺序错误');
+                return;
+            }
+            this.occupancy.delete(nextKey);
+        }
+
         this.snake.unshift(nextHead);
         this.occupancy.add(nextKey);
 
-        const consumedFood = nextHead.x === this.food.x && nextHead.y === this.food.y;
-        if (consumedFood) {
+        if (beanIndex !== -1) {
+            this.beans.splice(beanIndex, 1);
+            this.refreshBeanTexts();
             this.pendingGrowth += 1;
             this.score += 1;
+            this.nextValue += 1;
             if (this.score > this.bestScore) {
                 this.bestScore = this.score;
                 this.saveBestScore(this.bestScore);
             }
-            this.spawnFood();
             this.updateScoreText();
+            if (this.nextValue > this.maxValue && this.beans.length === 0) {
+                this.handleWin();
+                return;
+            }
+            this.refillBeans();
+            if (this.state !== GameState.Running) {
+                return;
+            }
         }
 
         if (this.pendingGrowth > 0) {
@@ -218,22 +251,67 @@ export class Game extends Phaser.Scene {
         return cell.x >= 0 && cell.x < GRID_WIDTH && cell.y >= 0 && cell.y < GRID_HEIGHT;
     }
 
-    private endGame(): void {
+    private endGame(reason?: string): void {
+        if (this.state !== GameState.Running) {
+            return;
+        }
         this.state = GameState.Dead;
+        if (reason) {
+            this.gameOverText.setText(`${reason}\nPress SPACE to restart`);
+        } else {
+            this.gameOverText.setText('Game Over\nPress SPACE to restart');
+        }
         this.gameOverText.setVisible(true);
         if (this.score > this.bestScore) {
             this.bestScore = this.score;
             this.saveBestScore(this.bestScore);
-            this.updateScoreText();
         }
+        this.updateScoreText();
     }
 
-    private spawnFood(): void {
-        if (this.occupancy.size >= GRID_WIDTH * GRID_HEIGHT) {
-            this.food = { x: -1, y: -1 };
+    private handleWin(): void {
+        if (this.state !== GameState.Running) {
+            return;
+        }
+        this.state = GameState.Win;
+        this.gameOverText.setText('You Win!\nPress SPACE to restart');
+        this.gameOverText.setVisible(true);
+        if (this.score > this.bestScore) {
+            this.bestScore = this.score;
+            this.saveBestScore(this.bestScore);
+        }
+        this.updateScoreText();
+    }
+
+    private refillBeans(): void {
+        if (this.state !== GameState.Running) {
             return;
         }
 
+        let added = false;
+        while (this.beans.length < INITIAL_BEAN_COUNT && this.nextSpawnValue <= this.maxValue) {
+            const cell = this.randomFreeCell();
+            if (!cell) {
+                this.handleWin();
+                return;
+            }
+
+            this.beans.push({ cell, value: this.nextSpawnValue });
+            this.occupancy.add(this.cellKey(cell));
+            this.nextSpawnValue += 1;
+            added = true;
+        }
+
+        if (added) {
+            this.refreshBeanTexts();
+        }
+
+        if (this.nextValue > this.maxValue && this.beans.length === 0) {
+            this.handleWin();
+        }
+    }
+
+    private randomFreeCell(): Cell | null {
         const freeCells: Cell[] = [];
         for (let x = 0; x < GRID_WIDTH; x += 1) {
             for (let y = 0; y < GRID_HEIGHT; y += 1) {
@@ -244,8 +322,41 @@ export class Game extends Phaser.Scene {
             }
         }
 
+        if (freeCells.length === 0) {
+            return null;
+        }
+
         const index = this.rng.between(0, freeCells.length - 1);
-        this.food = freeCells[index];
+        return freeCells[index];
+    }
+
+    private findBeanIndex(cell: Cell): number {
+        return this.beans.findIndex((bean) => bean.cell.x === cell.x && bean.cell.y === cell.y);
+    }
+
+    private clearBeanTexts(): void {
+        this.beanTexts.forEach((text) => text.destroy());
+        this.beanTexts = [];
+    }
+
+    private refreshBeanTexts(): void {
+        this.clearBeanTexts();
+        this.beans.forEach((bean) => {
+            const label = this.add.text(
+                bean.cell.x * CELL_SIZE + CELL_SIZE / 2,
+                bean.cell.y * CELL_SIZE + CELL_SIZE / 2,
+                bean.value.toString(),
+                {
+                    fontFamily: 'monospace',
+                    fontSize: '18px',
+                    color: '#ffffff'
+                }
+            );
+            label.setOrigin(0.5);
+            label.setDepth(2);
+            label.setScrollFactor(0);
+            this.beanTexts.push(label);
+        });
     }
 
     private draw(): void {
@@ -259,11 +370,11 @@ export class Game extends Phaser.Scene {
             this.graphics.fillRect(segment.x * CELL_SIZE, segment.y * CELL_SIZE, CELL_SIZE, CELL_SIZE);
         }
 
-        // Draw food (if available)
-        if (this.food.x >= 0 && this.food.y >= 0) {
+        // Draw beans
+        this.beans.forEach((bean) => {
             this.graphics.fillStyle(FOOD_COLOR, 1);
-            this.graphics.fillRect(this.food.x * CELL_SIZE, this.food.y * CELL_SIZE, CELL_SIZE, CELL_SIZE);
-        }
+            this.graphics.fillRect(bean.cell.x * CELL_SIZE, bean.cell.y * CELL_SIZE, CELL_SIZE, CELL_SIZE);
+        });
     }
 
     private isSameDirection(a: Cell, b: Cell): boolean {
@@ -279,7 +390,10 @@ export class Game extends Phaser.Scene {
     }
 
     private updateScoreText(): void {
-        this.scoreText.setText(`Score: ${this.score} (Best: ${this.bestScore})`);
+        const progress = this.nextValue <= this.maxValue
+            ? `Next: ${this.nextValue} / ${this.maxValue}`
+            : `Completed: ${this.maxValue} / ${this.maxValue}`;
+        this.scoreText.setText(`Score: ${this.score} (Best: ${this.bestScore})\n${progress}`);
     }
 
     private loadBestScore(): number {
