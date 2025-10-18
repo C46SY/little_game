@@ -1,7 +1,6 @@
 import Phaser from 'phaser';
 import {
     CELL_SIZE,
-    GAME_WIDTH,
     GRID_HEIGHT,
     GRID_WIDTH,
     MAX_SNAKE_LENGTH,
@@ -31,6 +30,7 @@ const DEMO_TOTAL_TOKENS = 20;
 const DEMO_ACTIVE_BEANS = 3;
 
 const FALLBACK_POEM: PoemDefinition = {
+    id: 'fallback-jingye-si',
     title: '静夜思',
     author: '李白',
     meter: 5,
@@ -63,6 +63,9 @@ export class Game extends Phaser.Scene {
     private difficulty: DifficultyKey = 'easy';
     private sequence!: BeanSequence;
     private bestScoreKey = `${BEST_SCORE_KEY_PREFIX}-easy`;
+    private selectedPoemId: string | null = null;
+    private restartButton!: Phaser.GameObjects.Text;
+    private menuButton!: Phaser.GameObjects.Text;
 
     constructor() {
         super('Game');
@@ -75,15 +78,30 @@ export class Game extends Phaser.Scene {
 
         const poems = loadPoemsFromCache(this, this.difficulty);
         const pool = poems.length > 0 ? poems : [FALLBACK_POEM];
-        const index = this.rng.between(0, pool.length - 1);
-        return new PoemSequence(this.difficulty, pool[index]);
+
+        const chosen = this.selectedPoemId
+            ? pool.find((poem) => poem.id === this.selectedPoemId) ?? pool[0]
+            : pool[this.rng.between(0, pool.length - 1)];
+
+        this.selectedPoemId = chosen.id;
+        this.registry.set('poemId', this.selectedPoemId);
+
+        return new PoemSequence(this.difficulty, chosen);
     }
 
-    public init(data: { difficulty?: DifficultyKey } = {}): void {
+    public init(data: { difficulty?: DifficultyKey; poemId?: string | null } = {}): void {
         this.rng = new Phaser.Math.RandomDataGenerator([Date.now().toString()]);
         const registryDifficulty = this.registry.get('difficulty') as DifficultyKey | undefined;
         this.difficulty = data?.difficulty ?? registryDifficulty ?? 'easy';
         this.registry.set('difficulty', this.difficulty);
+        if (this.difficulty === 'demo') {
+            this.selectedPoemId = null;
+            this.registry.set('poemId', null);
+        } else {
+            const registryPoemId = this.registry.get('poemId') as string | null | undefined;
+            this.selectedPoemId = data?.poemId ?? registryPoemId ?? null;
+            this.registry.set('poemId', this.selectedPoemId);
+        }
         this.sequence = this.createSequence();
         this.bestScoreKey = `${BEST_SCORE_KEY_PREFIX}-${this.difficulty}`;
         this.bestScore = this.loadBestScore();
@@ -97,16 +115,17 @@ export class Game extends Phaser.Scene {
 
         this.scoreText = this.add.text(0, 0, '', {
             fontFamily: '"Fredoka", "Comic Sans MS", "Arial Rounded MT Bold", sans-serif',
-            fontSize: '28px',
+            fontSize: '24px',
             color: '#2c3e50',
             align: 'left'
         });
-        this.scoreText.setPadding(18, 12, 18, 12);
+        this.scoreText.setPadding(14, 8, 14, 10);
         this.scoreText.setBackgroundColor('rgba(255,255,255,0.85)');
         this.scoreText.setShadow(2, 2, 'rgba(154, 208, 245, 0.6)', 0, true, true);
         this.scoreText.setDepth(5);
+        this.scoreText.setOrigin(0.5, 1);
 
-        this.gameOverText = this.add.text(PLAYFIELD_WIDTH / 2, PLAYFIELD_HEIGHT / 2, '游戏结束\n按 SPACE 键重新开始', {
+        this.gameOverText = this.add.text(PLAYFIELD_WIDTH / 2, PLAYFIELD_HEIGHT / 2 - 120, '', {
             fontFamily: '"Fredoka", "Comic Sans MS", "Arial Rounded MT Bold", sans-serif',
             fontSize: '48px',
             color: '#ff6b81',
@@ -118,6 +137,9 @@ export class Game extends Phaser.Scene {
         this.gameOverText.setStroke('#ffe3e3', 6);
         this.gameOverText.setShadow(3, 3, 'rgba(255, 166, 201, 0.5)', 0, true, true);
         this.gameOverText.setVisible(false);
+
+        this.restartButton = this.createActionButton(PLAYFIELD_WIDTH / 2, PLAYFIELD_HEIGHT / 2 + 20, '重新开始', () => this.resetGame());
+        this.menuButton = this.createActionButton(PLAYFIELD_WIDTH / 2, PLAYFIELD_HEIGHT / 2 + 100, '返回菜单', () => this.returnToMenu());
 
         const keyboard = this.input.keyboard;
         keyboard?.on('keydown', this.handleKeyDown, this);
@@ -145,7 +167,7 @@ export class Game extends Phaser.Scene {
 
     private resetGame(): void {
         this.state = GameState.Running;
-        this.gameOverText.setVisible(false);
+        this.hideEndOptions();
         this.snake = [];
         this.directionQueue = [];
         this.occupancy.clear();
@@ -173,6 +195,13 @@ export class Game extends Phaser.Scene {
     }
 
     private handleKeyDown(event: KeyboardEvent): void {
+        if (event.code === 'Escape') {
+            if (this.state !== GameState.Running) {
+                this.returnToMenu();
+            }
+            return;
+        }
+
         if (event.code === 'Space') {
             if (this.state === GameState.Dead || this.state === GameState.Win) {
                 this.resetGame();
@@ -308,12 +337,8 @@ export class Game extends Phaser.Scene {
             return;
         }
         this.state = GameState.Dead;
-        if (reason) {
-            this.gameOverText.setText(`${reason}\n按 SPACE 键重新开始`);
-        } else {
-            this.gameOverText.setText('游戏结束\n按 SPACE 键重新开始');
-        }
-        this.gameOverText.setVisible(true);
+        const message = reason ? `游戏结束：${reason}` : '游戏结束';
+        this.showEndOptions(`${message}\n请选择下一步`);
         if (this.score > this.bestScore) {
             this.bestScore = this.score;
             this.saveBestScore(this.bestScore);
@@ -326,8 +351,7 @@ export class Game extends Phaser.Scene {
             return;
         }
         this.state = GameState.Win;
-        this.gameOverText.setText('全部完成！\n按 SPACE 键重新开始');
-        this.gameOverText.setVisible(true);
+        this.showEndOptions('全部完成！\n请选择下一步');
         if (this.score > this.bestScore) {
             this.bestScore = this.score;
             this.saveBestScore(this.bestScore);
@@ -524,21 +548,76 @@ export class Game extends Phaser.Scene {
         lines.push(`难度：${difficultyInfo.label}｜${difficultyInfo.description}`);
         lines.push(this.sequence.summary);
         lines.push(`得分：${consumed}${total > 0 ? ` / ${total}` : ''}（历史最佳：${this.bestScore}）`);
+        const progressParts: string[] = [];
         if (lineProgress) {
-            lines.push(lineProgress);
+            progressParts.push(lineProgress);
         }
-        lines.push(nextLabel ? `下一目标：${nextLabel}` : '所有目标完成！');
+        progressParts.push(nextLabel ? `下一目标：${nextLabel}` : '所有目标完成！');
+        lines.push(progressParts.join(' ｜ '));
 
         this.scoreText.setText(lines.join('\n'));
         this.updateScoreLayout();
     }
 
     private updateScoreLayout(): void {
-        const width = this.scoreText.displayWidth;
         const height = this.scoreText.displayHeight;
-        const x = Math.floor(PLAYFIELD_PADDING_X + (GAME_WIDTH - width) / 2);
-        const y = Math.max(16, Math.floor(PLAYFIELD_PADDING_Y - height - 16));
-        this.scoreText.setPosition(x, y);
+        const bottomLimit = PLAYFIELD_PADDING_Y - 24;
+        const topLimit = 24;
+        let y = bottomLimit;
+        if (y - height < topLimit) {
+            y = topLimit + height;
+        }
+        this.scoreText.setPosition(PLAYFIELD_WIDTH / 2, y);
+    }
+
+    private createActionButton(x: number, y: number, label: string, onClick: () => void): Phaser.GameObjects.Text {
+        const button = this.add.text(x, y, label, {
+            fontFamily: '"Fredoka", "Comic Sans MS", "Arial Rounded MT Bold", sans-serif',
+            fontSize: '32px',
+            color: '#2c3e50',
+            align: 'center',
+            backgroundColor: 'rgba(255,255,255,0.92)'
+        });
+        button.setOrigin(0.5);
+        button.setPadding(32, 16, 32, 16);
+        button.setShadow(2, 2, 'rgba(154, 208, 245, 0.4)', 0, true, true);
+        button.setStroke('#ffffff', 4);
+        button.setDepth(6);
+        button.setVisible(false);
+        button.disableInteractive();
+        button.on('pointerdown', onClick);
+        button.on('pointerover', () => button.setStyle({ backgroundColor: 'rgba(255, 241, 214, 0.95)' }));
+        button.on('pointerout', () => button.setStyle({ backgroundColor: 'rgba(255,255,255,0.92)' }));
+        return button;
+    }
+
+    private showEndOptions(message: string): void {
+        this.gameOverText.setText(message);
+        this.gameOverText.setVisible(true);
+        this.setEndButtonsVisible(true);
+    }
+
+    private hideEndOptions(): void {
+        this.gameOverText.setVisible(false);
+        this.setEndButtonsVisible(false);
+    }
+
+    private setEndButtonsVisible(visible: boolean): void {
+        const buttons = [this.restartButton, this.menuButton];
+        buttons.forEach((button) => {
+            button.setVisible(visible);
+            if (visible) {
+                button.setInteractive({ useHandCursor: true });
+            } else {
+                button.disableInteractive();
+                button.setStyle({ backgroundColor: 'rgba(255,255,255,0.92)' });
+            }
+        });
+    }
+
+    private returnToMenu(): void {
+        this.registry.set('poemId', this.selectedPoemId);
+        this.scene.start('MainMenu');
     }
 
     private loadBestScore(): number {
