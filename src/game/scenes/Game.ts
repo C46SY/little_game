@@ -48,6 +48,7 @@ export class Game extends Phaser.Scene {
     private beanLabels: Phaser.GameObjects.Text[] = [];
     private scoreText!: Phaser.GameObjects.Text;
     private gameOverText!: Phaser.GameObjects.Text;
+    private gameOverMenuButton!: Phaser.GameObjects.Text;
     private stepEvent?: Phaser.Time.TimerEvent;
 
     private snake: Cell[] = [];
@@ -63,6 +64,7 @@ export class Game extends Phaser.Scene {
     private difficulty: DifficultyKey = 'easy';
     private sequence!: BeanSequence;
     private bestScoreKey = `${BEST_SCORE_KEY_PREFIX}-easy`;
+    private selectedPoem?: PoemDefinition;
 
     constructor() {
         super('Game');
@@ -73,17 +75,22 @@ export class Game extends Phaser.Scene {
             return new DemoSequence(DEMO_TOTAL_TOKENS, DEMO_ACTIVE_BEANS);
         }
 
+        if (this.selectedPoem) {
+            return new PoemSequence(this.difficulty, this.selectedPoem);
+        }
+
         const poems = loadPoemsFromCache(this, this.difficulty);
         const pool = poems.length > 0 ? poems : [FALLBACK_POEM];
         const index = this.rng.between(0, pool.length - 1);
         return new PoemSequence(this.difficulty, pool[index]);
     }
 
-    public init(data: { difficulty?: DifficultyKey } = {}): void {
+    public init(data: { difficulty?: DifficultyKey; poem?: PoemDefinition } = {}): void {
         this.rng = new Phaser.Math.RandomDataGenerator([Date.now().toString()]);
         const registryDifficulty = this.registry.get('difficulty') as DifficultyKey | undefined;
         this.difficulty = data?.difficulty ?? registryDifficulty ?? 'easy';
         this.registry.set('difficulty', this.difficulty);
+        this.selectedPoem = data?.poem;
         this.sequence = this.createSequence();
         this.bestScoreKey = `${BEST_SCORE_KEY_PREFIX}-${this.difficulty}`;
         this.bestScore = this.loadBestScore();
@@ -97,16 +104,16 @@ export class Game extends Phaser.Scene {
 
         this.scoreText = this.add.text(0, 0, '', {
             fontFamily: '"Fredoka", "Comic Sans MS", "Arial Rounded MT Bold", sans-serif',
-            fontSize: '28px',
+            fontSize: '24px',
             color: '#2c3e50',
             align: 'left'
         });
-        this.scoreText.setPadding(18, 12, 18, 12);
-        this.scoreText.setBackgroundColor('rgba(255,255,255,0.85)');
+        this.scoreText.setPadding(16, 10, 16, 10);
+        this.scoreText.setBackgroundColor('rgba(255,255,255,0.9)');
         this.scoreText.setShadow(2, 2, 'rgba(154, 208, 245, 0.6)', 0, true, true);
         this.scoreText.setDepth(5);
 
-        this.gameOverText = this.add.text(PLAYFIELD_WIDTH / 2, PLAYFIELD_HEIGHT / 2, '游戏结束\n按 SPACE 键重新开始', {
+        this.gameOverText = this.add.text(PLAYFIELD_WIDTH / 2, PLAYFIELD_HEIGHT / 2, '游戏结束', {
             fontFamily: '"Fredoka", "Comic Sans MS", "Arial Rounded MT Bold", sans-serif',
             fontSize: '48px',
             color: '#ff6b81',
@@ -118,6 +125,31 @@ export class Game extends Phaser.Scene {
         this.gameOverText.setStroke('#ffe3e3', 6);
         this.gameOverText.setShadow(3, 3, 'rgba(255, 166, 201, 0.5)', 0, true, true);
         this.gameOverText.setVisible(false);
+
+        this.gameOverMenuButton = this.add.text(PLAYFIELD_WIDTH / 2, this.gameOverText.y + 140, '返回菜单', {
+            fontFamily: '"Fredoka", "Comic Sans MS", "Arial Rounded MT Bold", sans-serif',
+            fontSize: '36px',
+            color: '#ffffff',
+            align: 'center',
+            backgroundColor: '#5dade2'
+        }).setOrigin(0.5);
+        this.gameOverMenuButton.setPadding(28, 14, 28, 14);
+        this.gameOverMenuButton.setShadow(3, 3, 'rgba(154, 208, 245, 0.6)', 0, true, true);
+        this.gameOverMenuButton.setStroke('#aed6f1', 6);
+        this.gameOverMenuButton.setVisible(false);
+        this.gameOverMenuButton.setDepth(6);
+        this.gameOverMenuButton.on('pointerdown', () => this.returnToMenu());
+        this.gameOverMenuButton.on('pointerover', () => {
+            if (this.gameOverMenuButton.visible) {
+                this.gameOverMenuButton.setStyle({ backgroundColor: '#85c1e9', color: '#ffffff' });
+            }
+        });
+        this.gameOverMenuButton.on('pointerout', () => {
+            if (this.gameOverMenuButton.visible) {
+                this.gameOverMenuButton.setStyle({ backgroundColor: '#5dade2', color: '#ffffff' });
+            }
+        });
+        this.gameOverMenuButton.disableInteractive();
 
         const keyboard = this.input.keyboard;
         keyboard?.on('keydown', this.handleKeyDown, this);
@@ -146,6 +178,7 @@ export class Game extends Phaser.Scene {
     private resetGame(): void {
         this.state = GameState.Running;
         this.gameOverText.setVisible(false);
+        this.hideGameOverMenu();
         this.snake = [];
         this.directionQueue = [];
         this.occupancy.clear();
@@ -173,6 +206,13 @@ export class Game extends Phaser.Scene {
     }
 
     private handleKeyDown(event: KeyboardEvent): void {
+        if (event.code === 'KeyM') {
+            if (this.state === GameState.Dead || this.state === GameState.Win) {
+                this.returnToMenu();
+            }
+            return;
+        }
+
         if (event.code === 'Space') {
             if (this.state === GameState.Dead || this.state === GameState.Win) {
                 this.resetGame();
@@ -309,11 +349,12 @@ export class Game extends Phaser.Scene {
         }
         this.state = GameState.Dead;
         if (reason) {
-            this.gameOverText.setText(`${reason}\n按 SPACE 键重新开始`);
+            this.gameOverText.setText(`${reason}\n按 SPACE 键重新开始\n按 M 键返回菜单`);
         } else {
-            this.gameOverText.setText('游戏结束\n按 SPACE 键重新开始');
+            this.gameOverText.setText('游戏结束\n按 SPACE 键重新开始\n按 M 键返回菜单');
         }
         this.gameOverText.setVisible(true);
+        this.showGameOverMenu();
         if (this.score > this.bestScore) {
             this.bestScore = this.score;
             this.saveBestScore(this.bestScore);
@@ -326,8 +367,9 @@ export class Game extends Phaser.Scene {
             return;
         }
         this.state = GameState.Win;
-        this.gameOverText.setText('全部完成！\n按 SPACE 键重新开始');
+        this.gameOverText.setText('全部完成！\n按 SPACE 键重新开始\n按 M 键返回菜单');
         this.gameOverText.setVisible(true);
+        this.showGameOverMenu();
         if (this.score > this.bestScore) {
             this.bestScore = this.score;
             this.saveBestScore(this.bestScore);
@@ -522,11 +564,19 @@ export class Game extends Phaser.Scene {
 
         const lines: string[] = [];
         lines.push(`难度：${difficultyInfo.label}｜${difficultyInfo.description}`);
-        lines.push(this.sequence.summary);
-        lines.push(`得分：${consumed}${total > 0 ? ` / ${total}` : ''}（历史最佳：${this.bestScore}）`);
+        const summaryLine = this.difficulty === 'demo'
+            ? `模式：${this.sequence.summary}`
+            : `诗词：${this.sequence.summary}`;
+        lines.push(summaryLine);
+
+        const progressSegments: string[] = [];
+        progressSegments.push(`得分：${consumed}${total > 0 ? ` / ${total}` : ''}`);
+        progressSegments.push(`历史最佳：${this.bestScore}`);
         if (lineProgress) {
-            lines.push(lineProgress);
+            progressSegments.push(lineProgress);
         }
+        lines.push(progressSegments.join(' ｜ '));
+
         lines.push(nextLabel ? `下一目标：${nextLabel}` : '所有目标完成！');
 
         this.scoreText.setText(lines.join('\n'));
@@ -537,7 +587,7 @@ export class Game extends Phaser.Scene {
         const width = this.scoreText.displayWidth;
         const height = this.scoreText.displayHeight;
         const x = Math.floor(PLAYFIELD_PADDING_X + (GAME_WIDTH - width) / 2);
-        const y = Math.max(16, Math.floor(PLAYFIELD_PADDING_Y - height - 16));
+        const y = Math.max(12, Math.floor(PLAYFIELD_PADDING_Y - height - 12));
         this.scoreText.setPosition(x, y);
     }
 
@@ -561,5 +611,23 @@ export class Game extends Phaser.Scene {
         }
 
         window.localStorage.setItem(this.bestScoreKey, value.toString());
+    }
+
+    private showGameOverMenu(): void {
+        const buttonY = this.gameOverText.y + this.gameOverText.displayHeight / 2 + 80;
+        this.gameOverMenuButton.setY(buttonY);
+        this.gameOverMenuButton.setVisible(true);
+        this.gameOverMenuButton.setStyle({ backgroundColor: '#5dade2', color: '#ffffff' });
+        this.gameOverMenuButton.setInteractive({ useHandCursor: true });
+    }
+
+    private hideGameOverMenu(): void {
+        this.gameOverMenuButton.setVisible(false);
+        this.gameOverMenuButton.disableInteractive();
+        this.gameOverMenuButton.setStyle({ backgroundColor: '#5dade2', color: '#ffffff' });
+    }
+
+    private returnToMenu(): void {
+        this.scene.start('MainMenu');
     }
 }
