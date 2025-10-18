@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import Phaser from 'phaser';
+import { PLAYFIELD_HEIGHT, PLAYFIELD_WIDTH } from './game/constants';
 import { Game as SnakeGame } from './game/scenes/Game';
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -11,10 +12,10 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     const config: Phaser.Types.Core.GameConfig = {
         type: Phaser.AUTO,
-        width: 800,
-        height: 600,
+        width: PLAYFIELD_WIDTH,
+        height: PLAYFIELD_HEIGHT,
         parent: 'game-container',
-        backgroundColor: '#101018',
+        backgroundColor: '#cfe8ff',
         pixelArt: true,
         roundPixels: true,
         scene: [SnakeGame]

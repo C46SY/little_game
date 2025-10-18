@@ -1,5 +1,15 @@
 import Phaser from 'phaser';
-import { CELL_SIZE, GAME_HEIGHT, GAME_WIDTH, GRID_HEIGHT, GRID_WIDTH } from '../constants';
+import {
+    CELL_SIZE,
+    GAME_WIDTH,
+    GRID_HEIGHT,
+    GRID_WIDTH,
+    PLAYFIELD_HEIGHT,
+    PLAYFIELD_PADDING_X,
+    PLAYFIELD_PADDING_Y,
+    PLAYFIELD_WIDTH
+} from '../constants';
+import { createGameTextures } from '../utils/textureFactory';
 
 type Cell = { x: number; y: number };
 type Bean = { cell: Cell; value: number };
@@ -10,7 +20,7 @@ enum GameState {
     Win = 'win'
 }
 
-const STEP_DELAY = 100; // milliseconds, 10 ticks per second
+const STEP_DELAY = 150; // milliseconds, ~6.5 ticks per second
 const INITIAL_LENGTH = 3;
 const BEST_SCORE_KEY = 'snake-best-score';
 const INITIAL_BEAN_COUNT = 3;
@@ -47,9 +57,11 @@ export class Game extends Phaser.Scene {
     }
 
     public create(): void {
-        this.add.image(GAME_WIDTH / 2, GAME_HEIGHT / 2, 'playfield').setDepth(0);
+        createGameTextures(this);
 
-        this.scoreText = this.add.text(24, 24, '', {
+        this.add.image(PLAYFIELD_WIDTH / 2, PLAYFIELD_HEIGHT / 2, 'playfield').setDepth(0);
+
+        this.scoreText = this.add.text(0, 0, '', {
             fontFamily: '"Fredoka", "Comic Sans MS", "Arial Rounded MT Bold", sans-serif',
             fontSize: '28px',
             color: '#2c3e50',
@@ -60,7 +72,7 @@ export class Game extends Phaser.Scene {
         this.scoreText.setShadow(2, 2, 'rgba(154, 208, 245, 0.6)', 0, true, true);
         this.scoreText.setDepth(5);
 
-        this.gameOverText = this.add.text(GAME_WIDTH / 2, GAME_HEIGHT / 2, 'Game Over\nPress SPACE to restart', {
+        this.gameOverText = this.add.text(PLAYFIELD_WIDTH / 2, PLAYFIELD_HEIGHT / 2, 'Game Over\nPress SPACE to restart', {
             fontFamily: '"Fredoka", "Comic Sans MS", "Arial Rounded MT Bold", sans-serif',
             fontSize: '48px',
             color: '#ff6b81',
@@ -341,11 +353,13 @@ export class Game extends Phaser.Scene {
     }
 
     private updateSnakeSprites(): void {
+        const offsetX = PLAYFIELD_PADDING_X + CELL_SIZE / 2;
+        const offsetY = PLAYFIELD_PADDING_Y + CELL_SIZE / 2;
         for (let i = 0; i < this.snake.length; i += 1) {
             const segment = this.snake[i];
             const sprite = this.getSnakeSprite(i);
             sprite.setTexture(i === 0 ? 'snake-head' : 'snake-body');
-            sprite.setPosition(segment.x * CELL_SIZE + CELL_SIZE / 2, segment.y * CELL_SIZE + CELL_SIZE / 2);
+            sprite.setPosition(segment.x * CELL_SIZE + offsetX, segment.y * CELL_SIZE + offsetY);
             sprite.setVisible(true);
             sprite.setActive(true);
         }
@@ -358,11 +372,13 @@ export class Game extends Phaser.Scene {
     }
 
     private updateBeanSprites(): void {
+        const offsetX = PLAYFIELD_PADDING_X + CELL_SIZE / 2;
+        const offsetY = PLAYFIELD_PADDING_Y + CELL_SIZE / 2;
         for (let i = 0; i < this.beans.length; i += 1) {
             const bean = this.beans[i];
             const sprite = this.getBeanSprite(i);
-            const centerX = bean.cell.x * CELL_SIZE + CELL_SIZE / 2;
-            const centerY = bean.cell.y * CELL_SIZE + CELL_SIZE / 2;
+            const centerX = bean.cell.x * CELL_SIZE + offsetX;
+            const centerY = bean.cell.y * CELL_SIZE + offsetY;
             sprite.setPosition(centerX, centerY);
             sprite.setVisible(true);
             sprite.setActive(true);
@@ -470,6 +486,15 @@ export class Game extends Phaser.Scene {
             ? `Next: ${this.nextValue} / ${this.maxValue}`
             : `Completed: ${this.maxValue} / ${this.maxValue}`;
         this.scoreText.setText(`Score: ${this.score} (Best: ${this.bestScore})\n${progress}`);
+        this.updateScoreLayout();
+    }
+
+    private updateScoreLayout(): void {
+        const width = this.scoreText.displayWidth;
+        const height = this.scoreText.displayHeight;
+        const x = Math.floor(PLAYFIELD_PADDING_X + (GAME_WIDTH - width) / 2);
+        const y = Math.max(16, Math.floor(PLAYFIELD_PADDING_Y - height - 16));
+        this.scoreText.setPosition(x, y);
     }
 
     private loadBestScore(): number {
