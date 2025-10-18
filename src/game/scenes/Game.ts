@@ -1,4 +1,15 @@
 import Phaser from 'phaser';
+import {
+    CELL_SIZE,
+    GAME_WIDTH,
+    GRID_HEIGHT,
+    GRID_WIDTH,
+    PLAYFIELD_HEIGHT,
+    PLAYFIELD_PADDING_X,
+    PLAYFIELD_PADDING_Y,
+    PLAYFIELD_WIDTH
+} from '../constants';
+import { createGameTextures } from '../utils/textureFactory';
 
 type Cell = { x: number; y: number };
 type Bean = { cell: Cell; value: number };
@@ -9,21 +20,15 @@ enum GameState {
     Win = 'win'
 }
 
-const CELL_SIZE = 32;
-const GRID_WIDTH = 25;
-const GRID_HEIGHT = 18;
-const GAME_WIDTH = GRID_WIDTH * CELL_SIZE;
-const GAME_HEIGHT = GRID_HEIGHT * CELL_SIZE;
-const STEP_DELAY = 100; // milliseconds, 10 ticks per second
+const STEP_DELAY = 150; // milliseconds, ~6.5 ticks per second
 const INITIAL_LENGTH = 3;
 const BEST_SCORE_KEY = 'snake-best-score';
-const HEAD_COLOR = 0x7af077;
-const BODY_COLOR = 0x3a9b3a;
-const FOOD_COLOR = 0xf04e4e;
 const INITIAL_BEAN_COUNT = 3;
 
 export class Game extends Phaser.Scene {
-    private graphics!: Phaser.GameObjects.Graphics;
+    private snakeSprites: Phaser.GameObjects.Sprite[] = [];
+    private beanSprites: Phaser.GameObjects.Sprite[] = [];
+    private beanLabels: Phaser.GameObjects.Text[] = [];
     private scoreText!: Phaser.GameObjects.Text;
     private gameOverText!: Phaser.GameObjects.Text;
     private stepEvent?: Phaser.Time.TimerEvent;
@@ -36,7 +41,6 @@ export class Game extends Phaser.Scene {
     private nextValue = 1;
     private nextSpawnValue = 1;
     private maxValue = 20;
-    private beanTexts: Phaser.GameObjects.Text[] = [];
     private occupancy: Set<string> = new Set();
     private score = 0;
     private bestScore = 0;
@@ -53,22 +57,32 @@ export class Game extends Phaser.Scene {
     }
 
     public create(): void {
-        this.graphics = this.add.graphics();
-        this.graphics.setDepth(1);
+        createGameTextures(this);
 
-        this.scoreText = this.add.text(16, 16, '', {
-            fontFamily: 'monospace',
-            fontSize: '24px',
-            color: '#ffffff'
+        this.add.image(PLAYFIELD_WIDTH / 2, PLAYFIELD_HEIGHT / 2, 'playfield').setDepth(0);
+
+        this.scoreText = this.add.text(0, 0, '', {
+            fontFamily: '"Fredoka", "Comic Sans MS", "Arial Rounded MT Bold", sans-serif',
+            fontSize: '28px',
+            color: '#2c3e50',
+            align: 'left'
         });
+        this.scoreText.setPadding(18, 12, 18, 12);
+        this.scoreText.setBackgroundColor('rgba(255,255,255,0.85)');
+        this.scoreText.setShadow(2, 2, 'rgba(154, 208, 245, 0.6)', 0, true, true);
+        this.scoreText.setDepth(5);
 
-        this.gameOverText = this.add.text(GAME_WIDTH / 2, GAME_HEIGHT / 2, 'Game Over\nPress SPACE to restart', {
-            fontFamily: 'monospace',
+        this.gameOverText = this.add.text(PLAYFIELD_WIDTH / 2, PLAYFIELD_HEIGHT / 2, 'Game Over\nPress SPACE to restart', {
+            fontFamily: '"Fredoka", "Comic Sans MS", "Arial Rounded MT Bold", sans-serif',
             fontSize: '48px',
-            color: '#ff9d9d',
-            align: 'center'
+            color: '#ff6b81',
+            align: 'center',
+            backgroundColor: 'rgba(255,255,255,0.9)'
         });
         this.gameOverText.setOrigin(0.5);
+        this.gameOverText.setDepth(6);
+        this.gameOverText.setStroke('#ffe3e3', 6);
+        this.gameOverText.setShadow(3, 3, 'rgba(255, 166, 201, 0.5)', 0, true, true);
         this.gameOverText.setVisible(false);
 
         const keyboard = this.input.keyboard;
@@ -77,7 +91,12 @@ export class Game extends Phaser.Scene {
         this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
             keyboard?.off('keydown', this.handleKeyDown, this);
             this.stepEvent?.destroy();
-            this.clearBeanTexts();
+            this.snakeSprites.forEach((sprite) => sprite.destroy());
+            this.beanSprites.forEach((sprite) => sprite.destroy());
+            this.beanLabels.forEach((label) => label.destroy());
+            this.snakeSprites = [];
+            this.beanSprites = [];
+            this.beanLabels = [];
         });
 
         this.resetGame();
@@ -100,7 +119,8 @@ export class Game extends Phaser.Scene {
         this.score = 0;
         this.direction = { x: 1, y: 0 };
         this.beans = [];
-        this.clearBeanTexts();
+        this.hideSnakeSprites();
+        this.hideBeanViews();
         this.nextValue = 1;
         this.nextSpawnValue = 1;
         this.maxValue = 20;
@@ -216,7 +236,6 @@ export class Game extends Phaser.Scene {
 
         if (beanIndex !== -1) {
             this.beans.splice(beanIndex, 1);
-            this.refreshBeanTexts();
             this.pendingGrowth += 1;
             this.score += 1;
             this.nextValue += 1;
@@ -288,7 +307,6 @@ export class Game extends Phaser.Scene {
             return;
         }
 
-        let added = false;
         while (this.beans.length < INITIAL_BEAN_COUNT && this.nextSpawnValue <= this.maxValue) {
             const cell = this.randomFreeCell();
             if (!cell) {
@@ -299,11 +317,6 @@ export class Game extends Phaser.Scene {
             this.beans.push({ cell, value: this.nextSpawnValue });
             this.occupancy.add(this.cellKey(cell));
             this.nextSpawnValue += 1;
-            added = true;
-        }
-
-        if (added) {
-            this.refreshBeanTexts();
         }
 
         if (this.nextValue > this.maxValue && this.beans.length === 0) {
@@ -334,47 +347,126 @@ export class Game extends Phaser.Scene {
         return this.beans.findIndex((bean) => bean.cell.x === cell.x && bean.cell.y === cell.y);
     }
 
-    private clearBeanTexts(): void {
-        this.beanTexts.forEach((text) => text.destroy());
-        this.beanTexts = [];
-    }
-
-    private refreshBeanTexts(): void {
-        this.clearBeanTexts();
-        this.beans.forEach((bean) => {
-            const label = this.add.text(
-                bean.cell.x * CELL_SIZE + CELL_SIZE / 2,
-                bean.cell.y * CELL_SIZE + CELL_SIZE / 2,
-                bean.value.toString(),
-                {
-                    fontFamily: 'monospace',
-                    fontSize: '18px',
-                    color: '#ffffff'
-                }
-            );
-            label.setOrigin(0.5);
-            label.setDepth(2);
-            label.setScrollFactor(0);
-            this.beanTexts.push(label);
-        });
-    }
-
     private draw(): void {
-        this.graphics.clear();
+        this.updateSnakeSprites();
+        this.updateBeanSprites();
+    }
 
-        // Draw snake body
-        for (let i = this.snake.length - 1; i >= 0; i -= 1) {
+    private updateSnakeSprites(): void {
+        const offsetX = PLAYFIELD_PADDING_X + CELL_SIZE / 2;
+        const offsetY = PLAYFIELD_PADDING_Y + CELL_SIZE / 2;
+        for (let i = 0; i < this.snake.length; i += 1) {
             const segment = this.snake[i];
-            const color = i === 0 ? HEAD_COLOR : BODY_COLOR;
-            this.graphics.fillStyle(color, 1);
-            this.graphics.fillRect(segment.x * CELL_SIZE, segment.y * CELL_SIZE, CELL_SIZE, CELL_SIZE);
+            const sprite = this.getSnakeSprite(i);
+            sprite.setTexture(i === 0 ? 'snake-head' : 'snake-body');
+            sprite.setPosition(segment.x * CELL_SIZE + offsetX, segment.y * CELL_SIZE + offsetY);
+            sprite.setVisible(true);
+            sprite.setActive(true);
         }
 
-        // Draw beans
-        this.beans.forEach((bean) => {
-            this.graphics.fillStyle(FOOD_COLOR, 1);
-            this.graphics.fillRect(bean.cell.x * CELL_SIZE, bean.cell.y * CELL_SIZE, CELL_SIZE, CELL_SIZE);
+        for (let i = this.snake.length; i < this.snakeSprites.length; i += 1) {
+            const sprite = this.snakeSprites[i];
+            sprite.setVisible(false);
+            sprite.setActive(false);
+        }
+    }
+
+    private updateBeanSprites(): void {
+        const offsetX = PLAYFIELD_PADDING_X + CELL_SIZE / 2;
+        const offsetY = PLAYFIELD_PADDING_Y + CELL_SIZE / 2;
+        for (let i = 0; i < this.beans.length; i += 1) {
+            const bean = this.beans[i];
+            const sprite = this.getBeanSprite(i);
+            const centerX = bean.cell.x * CELL_SIZE + offsetX;
+            const centerY = bean.cell.y * CELL_SIZE + offsetY;
+            sprite.setPosition(centerX, centerY);
+            sprite.setVisible(true);
+            sprite.setActive(true);
+
+            const label = this.getBeanLabel(i);
+            label.setPosition(centerX, centerY + 2);
+            label.setText(bean.value.toString());
+            label.setVisible(true);
+            label.setActive(true);
+        }
+
+        for (let i = this.beans.length; i < this.beanSprites.length; i += 1) {
+            const sprite = this.beanSprites[i];
+            sprite.setVisible(false);
+            sprite.setActive(false);
+        }
+
+        for (let i = this.beans.length; i < this.beanLabels.length; i += 1) {
+            const label = this.beanLabels[i];
+            label.setVisible(false);
+            label.setActive(false);
+        }
+    }
+
+    private hideSnakeSprites(): void {
+        this.snakeSprites.forEach((sprite) => {
+            sprite.setVisible(false);
+            sprite.setActive(false);
         });
+    }
+
+    private hideBeanViews(): void {
+        this.beanSprites.forEach((sprite) => {
+            sprite.setVisible(false);
+            sprite.setActive(false);
+        });
+        this.beanLabels.forEach((label) => {
+            label.setVisible(false);
+            label.setActive(false);
+        });
+    }
+
+    private getSnakeSprite(index: number): Phaser.GameObjects.Sprite {
+        let sprite = this.snakeSprites[index];
+        if (!sprite) {
+            sprite = this.add.sprite(0, 0, 'snake-body');
+            sprite.setOrigin(0.5);
+            sprite.setDisplaySize(CELL_SIZE, CELL_SIZE);
+            sprite.setDepth(3);
+            sprite.setVisible(false);
+            sprite.setActive(false);
+            this.snakeSprites[index] = sprite;
+        }
+        return sprite;
+    }
+
+    private getBeanSprite(index: number): Phaser.GameObjects.Sprite {
+        let sprite = this.beanSprites[index];
+        if (!sprite) {
+            sprite = this.add.sprite(0, 0, 'bean');
+            sprite.setOrigin(0.5);
+            sprite.setDisplaySize(CELL_SIZE * 0.85, CELL_SIZE * 0.85);
+            sprite.setDepth(4);
+            sprite.setVisible(false);
+            sprite.setActive(false);
+            this.beanSprites[index] = sprite;
+        }
+        return sprite;
+    }
+
+    private getBeanLabel(index: number): Phaser.GameObjects.Text {
+        let label = this.beanLabels[index];
+        if (!label) {
+            label = this.add.text(0, 0, '', {
+                fontFamily: '"Fredoka", "Comic Sans MS", "Arial Rounded MT Bold", sans-serif',
+                fontSize: '22px',
+                color: '#ffffff',
+                fontStyle: 'bold',
+                stroke: '#b65b1f',
+                strokeThickness: 6,
+                align: 'center'
+            });
+            label.setOrigin(0.5);
+            label.setDepth(5);
+            label.setShadow(2, 2, 'rgba(0,0,0,0.25)', 0, true, true);
+            this.beanLabels[index] = label;
+        }
+        return label;
     }
 
     private isSameDirection(a: Cell, b: Cell): boolean {
@@ -394,6 +486,15 @@ export class Game extends Phaser.Scene {
             ? `Next: ${this.nextValue} / ${this.maxValue}`
             : `Completed: ${this.maxValue} / ${this.maxValue}`;
         this.scoreText.setText(`Score: ${this.score} (Best: ${this.bestScore})\n${progress}`);
+        this.updateScoreLayout();
+    }
+
+    private updateScoreLayout(): void {
+        const width = this.scoreText.displayWidth;
+        const height = this.scoreText.displayHeight;
+        const x = Math.floor(PLAYFIELD_PADDING_X + (GAME_WIDTH - width) / 2);
+        const y = Math.max(16, Math.floor(PLAYFIELD_PADDING_Y - height - 16));
+        this.scoreText.setPosition(x, y);
     }
 
     private loadBestScore(): number {
