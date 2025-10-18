@@ -1,4 +1,5 @@
 import { Scene } from 'phaser';
+import { PLAYFIELD_HEIGHT, PLAYFIELD_WIDTH } from '../constants';
 
 export class GameOver extends Scene
 {
@@ -16,10 +17,10 @@ export class GameOver extends Scene
         this.camera = this.cameras.main;
         this.camera.setBackgroundColor(0xfdf6ff);
 
-        this.background = this.add.image(512, 384, 'playfield');
+        this.background = this.add.image(PLAYFIELD_WIDTH / 2, PLAYFIELD_HEIGHT / 2, 'playfield');
         this.background.setAlpha(0.7);
 
-        this.gameover_text = this.add.text(512, 360, '游戏结束', {
+        this.gameover_text = this.add.text(PLAYFIELD_WIDTH / 2, PLAYFIELD_HEIGHT / 2 - 24, '游戏结束', {
             fontFamily: '"Fredoka", "Comic Sans MS", "Arial Rounded MT Bold", sans-serif',
             fontSize: 64,
             color: '#ff6b81',
@@ -31,7 +32,7 @@ export class GameOver extends Scene
         this.gameover_text.setShadow(3, 3, 'rgba(255, 166, 201, 0.5)', 0, true, true);
         this.gameover_text.setStroke('#ffe3e3', 6);
 
-        const hint = this.add.text(512, 450, '轻触或按任意键返回主菜单', {
+        const hint = this.add.text(PLAYFIELD_WIDTH / 2, PLAYFIELD_HEIGHT / 2 + 66, '轻触或按任意键返回主菜单', {
             fontFamily: '"Fredoka", "Comic Sans MS", "Arial Rounded MT Bold", sans-serif',
             fontSize: 28,
             color: '#2c3e50',

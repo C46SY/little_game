@@ -1,0 +1,32 @@
+{
+  "defaultDifficulty": "easy",
+  "items": [
+    {
+      "id": "demo",
+      "label": "Demo：数字顺序练习",
+      "mode": "numeric",
+      "description": "原始的数字顺序练习模式"
+    },
+    {
+      "id": "easy",
+      "label": "简单：《静夜思》",
+      "title": "静夜思",
+      "mode": "poem",
+      "source": "assets/content/poems/jingyesi.csv"
+    },
+    {
+      "id": "medium",
+      "label": "中等：可自定义诗词",
+      "title": "静夜思",
+      "mode": "poem",
+      "source": "assets/content/poems/jingyesi.csv"
+    },
+    {
+      "id": "hard",
+      "label": "困难：可自定义诗词",
+      "title": "静夜思",
+      "mode": "poem",
+      "source": "assets/content/poems/jingyesi.csv"
+    }
+  ]
+}

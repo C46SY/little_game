@@ -4,15 +4,21 @@ import {
     GAME_WIDTH,
     GRID_HEIGHT,
     GRID_WIDTH,
+    MAX_SNAKE_LENGTH,
     PLAYFIELD_HEIGHT,
     PLAYFIELD_PADDING_X,
     PLAYFIELD_PADDING_Y,
     PLAYFIELD_WIDTH
 } from '../constants';
+import {
+    DifficultyMode,
+    SequenceToken,
+    loadDifficultyContent
+} from '../utils/contentManager';
 import { createGameTextures } from '../utils/textureFactory';
 
 type Cell = { x: number; y: number };
-type Bean = { cell: Cell; value: number };
+type Bean = { cell: Cell; value: number; label: string };
 
 enum GameState {
     Running = 'running',
@@ -22,7 +28,7 @@ enum GameState {
 
 const STEP_DELAY = 150; // milliseconds, ~6.5 ticks per second
 const INITIAL_LENGTH = 3;
-const BEST_SCORE_KEY = 'snake-best-score';
+const BEST_SCORE_KEY_BASE = 'snake-best-score';
 const INITIAL_BEAN_COUNT = 3;
 
 export class Game extends Phaser.Scene {
@@ -39,21 +45,45 @@ export class Game extends Phaser.Scene {
     private pendingGrowth = 0;
     private beans: Bean[] = [];
     private nextValue = 1;
-    private nextSpawnValue = 1;
-    private maxValue = 20;
+    private maxValue = 0;
     private occupancy: Set<string> = new Set();
     private score = 0;
     private bestScore = 0;
     private state: GameState = GameState.Running;
     private rng!: Phaser.Math.RandomDataGenerator;
 
+    private mode: DifficultyMode = 'numeric';
+    private sequenceTokens: SequenceToken[] = [];
+    private groupedTokens: SequenceToken[][] = [];
+    private nextSpawnIndex = 0;
+    private currentGroupIndex = 0;
+    private requestedDifficultyId?: string;
+    private loadTask?: Promise<void>;
+    private contentReady = false;
+    private difficultyLabel = '';
+    private poemLines: string[] = [];
+    private bestScoreKey = BEST_SCORE_KEY_BASE;
+
     constructor() {
         super('Game');
     }
 
-    public init(): void {
+    public init(data?: { difficultyId?: string }): void {
+        this.requestedDifficultyId = data?.difficultyId;
         this.rng = new Phaser.Math.RandomDataGenerator([Date.now().toString()]);
-        this.bestScore = this.loadBestScore();
+        this.bestScore = 0;
+        this.score = 0;
+        this.contentReady = false;
+        this.loadTask = undefined;
+        this.sequenceTokens = [];
+        this.groupedTokens = [];
+        this.poemLines = [];
+        this.nextSpawnIndex = 0;
+        this.currentGroupIndex = 0;
+        this.nextValue = 1;
+        this.difficultyLabel = '';
+        this.bestScoreKey = BEST_SCORE_KEY_BASE;
+        this.maxValue = 0;
     }
 
     public create(): void {
@@ -63,7 +93,7 @@ export class Game extends Phaser.Scene {
 
         this.scoreText = this.add.text(0, 0, '', {
             fontFamily: '"Fredoka", "Comic Sans MS", "Arial Rounded MT Bold", sans-serif',
-            fontSize: '28px',
+            fontSize: '30px',
             color: '#2c3e50',
             align: 'left'
         });
@@ -71,8 +101,9 @@ export class Game extends Phaser.Scene {
         this.scoreText.setBackgroundColor('rgba(255,255,255,0.85)');
         this.scoreText.setShadow(2, 2, 'rgba(154, 208, 245, 0.6)', 0, true, true);
         this.scoreText.setDepth(5);
+        this.scoreText.setText('正在加载素材...');
 
-        this.gameOverText = this.add.text(PLAYFIELD_WIDTH / 2, PLAYFIELD_HEIGHT / 2, 'Game Over\nPress SPACE to restart', {
+        this.gameOverText = this.add.text(PLAYFIELD_WIDTH / 2, PLAYFIELD_HEIGHT / 2, '游戏结束\n按 SPACE 键重新开始', {
             fontFamily: '"Fredoka", "Comic Sans MS", "Arial Rounded MT Bold", sans-serif',
             fontSize: '48px',
             color: '#ff6b81',
@@ -99,17 +130,69 @@ export class Game extends Phaser.Scene {
             this.beanLabels = [];
         });
 
-        this.resetGame();
+        void this.initializeGame();
+    }
 
-        this.stepEvent = this.time.addEvent({
-            delay: STEP_DELAY,
-            loop: true,
-            callback: this.step,
-            callbackScope: this
-        });
+    private async initializeGame(): Promise<void> {
+        try {
+            await this.ensureContentLoaded();
+            this.resetGame();
+            if (!this.stepEvent) {
+                this.stepEvent = this.time.addEvent({
+                    delay: STEP_DELAY,
+                    loop: true,
+                    callback: this.step,
+                    callbackScope: this
+                });
+            }
+        } catch (error) {
+            const message = error instanceof Error ? error.message : '素材加载失败';
+            this.showLoadingError(message);
+        }
+    }
+
+    private async ensureContentLoaded(): Promise<void> {
+        if (this.contentReady) {
+            return;
+        }
+
+        if (!this.loadTask) {
+            this.loadTask = (async () => {
+                try {
+                    const registryDifficulty = this.registry.get('difficultyId') as string | undefined;
+                    const targetId = this.requestedDifficultyId ?? registryDifficulty;
+                    const content = await loadDifficultyContent(targetId);
+
+                    this.mode = content.mode;
+                    this.sequenceTokens = content.tokens;
+                    this.groupedTokens = content.groups;
+                    this.difficultyLabel = content.definition.label;
+                    this.poemLines = content.poem ? content.poem.lines.map((line) => line.original) : [];
+                    this.maxValue = content.tokens.length;
+                    this.registry.set('difficultyId', content.definition.id);
+                    this.bestScoreKey = `${BEST_SCORE_KEY_BASE}-${content.definition.id}`;
+                    this.bestScore = this.loadBestScore();
+                    this.contentReady = true;
+                } catch (error) {
+                    this.loadTask = undefined;
+                    throw error;
+                }
+            })();
+        }
+
+        await this.loadTask;
+    }
+
+    private showLoadingError(message: string): void {
+        this.scoreText.setText(`素材加载失败\n${message}`);
+        this.updateScoreLayout();
     }
 
     private resetGame(): void {
+        if (!this.contentReady) {
+            return;
+        }
+
         this.state = GameState.Running;
         this.gameOverText.setVisible(false);
         this.snake = [];
@@ -122,8 +205,8 @@ export class Game extends Phaser.Scene {
         this.hideSnakeSprites();
         this.hideBeanViews();
         this.nextValue = 1;
-        this.nextSpawnValue = 1;
-        this.maxValue = 20;
+        this.nextSpawnIndex = 0;
+        this.currentGroupIndex = 0;
 
         const startX = Math.floor(GRID_WIDTH / 2);
         const startY = Math.floor(GRID_HEIGHT / 2);
@@ -236,7 +319,15 @@ export class Game extends Phaser.Scene {
 
         if (beanIndex !== -1) {
             this.beans.splice(beanIndex, 1);
-            this.pendingGrowth += 1;
+            const remainingCapacity = Math.max(0, MAX_SNAKE_LENGTH - this.snake.length);
+            if (remainingCapacity > 0) {
+                this.pendingGrowth += 1;
+                if (this.pendingGrowth > remainingCapacity) {
+                    this.pendingGrowth = remainingCapacity;
+                }
+            } else {
+                this.pendingGrowth = 0;
+            }
             this.score += 1;
             this.nextValue += 1;
             if (this.score > this.bestScore) {
@@ -276,9 +367,9 @@ export class Game extends Phaser.Scene {
         }
         this.state = GameState.Dead;
         if (reason) {
-            this.gameOverText.setText(`${reason}\nPress SPACE to restart`);
+            this.gameOverText.setText(`${reason}\n按 SPACE 键重新开始`);
         } else {
-            this.gameOverText.setText('Game Over\nPress SPACE to restart');
+            this.gameOverText.setText('游戏结束\n按 SPACE 键重新开始');
         }
         this.gameOverText.setVisible(true);
         if (this.score > this.bestScore) {
@@ -293,7 +384,7 @@ export class Game extends Phaser.Scene {
             return;
         }
         this.state = GameState.Win;
-        this.gameOverText.setText('You Win!\nPress SPACE to restart');
+        this.gameOverText.setText('挑战成功！\n按 SPACE 键重新开始');
         this.gameOverText.setVisible(true);
         if (this.score > this.bestScore) {
             this.bestScore = this.score;
@@ -303,25 +394,57 @@ export class Game extends Phaser.Scene {
     }
 
     private refillBeans(): void {
-        if (this.state !== GameState.Running) {
+        if (this.state !== GameState.Running || !this.contentReady) {
             return;
         }
 
-        while (this.beans.length < INITIAL_BEAN_COUNT && this.nextSpawnValue <= this.maxValue) {
-            const cell = this.randomFreeCell();
-            if (!cell) {
-                this.handleWin();
-                return;
+        if (this.maxValue === 0) {
+            this.handleWin();
+            return;
+        }
+
+        if (this.mode === 'numeric') {
+            while (this.beans.length < INITIAL_BEAN_COUNT && this.nextSpawnIndex < this.sequenceTokens.length) {
+                const token = this.sequenceTokens[this.nextSpawnIndex];
+                this.spawnBean(token);
+                this.nextSpawnIndex += 1;
+                if (this.state !== GameState.Running) {
+                    return;
+                }
             }
 
-            this.beans.push({ cell, value: this.nextSpawnValue });
-            this.occupancy.add(this.cellKey(cell));
-            this.nextSpawnValue += 1;
+            if (this.nextValue > this.maxValue && this.beans.length === 0) {
+                this.handleWin();
+            }
+            return;
         }
 
-        if (this.nextValue > this.maxValue && this.beans.length === 0) {
-            this.handleWin();
+        if (this.beans.length > 0) {
+            return;
         }
+
+        if (this.currentGroupIndex >= this.groupedTokens.length) {
+            if (this.nextValue > this.maxValue) {
+                this.handleWin();
+            }
+            return;
+        }
+
+        const group = this.groupedTokens[this.currentGroupIndex];
+        group.forEach((token) => this.spawnBean(token));
+        this.currentGroupIndex += 1;
+    }
+
+    private spawnBean(token: SequenceToken): void {
+        const cell = this.randomFreeCell();
+        if (!cell) {
+            this.handleWin();
+            return;
+        }
+
+        const bean: Bean = { cell, value: token.order, label: token.label };
+        this.beans.push(bean);
+        this.occupancy.add(this.cellKey(cell));
     }
 
     private randomFreeCell(): Cell | null {
@@ -385,7 +508,7 @@ export class Game extends Phaser.Scene {
 
             const label = this.getBeanLabel(i);
             label.setPosition(centerX, centerY + 2);
-            label.setText(bean.value.toString());
+            label.setText(bean.label);
             label.setVisible(true);
             label.setActive(true);
         }
@@ -454,7 +577,7 @@ export class Game extends Phaser.Scene {
         if (!label) {
             label = this.add.text(0, 0, '', {
                 fontFamily: '"Fredoka", "Comic Sans MS", "Arial Rounded MT Bold", sans-serif',
-                fontSize: '22px',
+                fontSize: '26px',
                 color: '#ffffff',
                 fontStyle: 'bold',
                 stroke: '#b65b1f',
@@ -482,11 +605,55 @@ export class Game extends Phaser.Scene {
     }
 
     private updateScoreText(): void {
-        const progress = this.nextValue <= this.maxValue
-            ? `Next: ${this.nextValue} / ${this.maxValue}`
-            : `Completed: ${this.maxValue} / ${this.maxValue}`;
-        this.scoreText.setText(`Score: ${this.score} (Best: ${this.bestScore})\n${progress}`);
+        if (!this.contentReady) {
+            this.scoreText.setText('正在加载素材...');
+            this.updateScoreLayout();
+            return;
+        }
+
+        const lines: string[] = [];
+        lines.push(`难度：${this.difficultyLabel || '未知'}`);
+        lines.push(`得分：${this.score} (最佳：${this.bestScore})`);
+
+        if (this.maxValue === 0) {
+            lines.push('暂无可收集的目标');
+        } else {
+            const nextToken = this.getNextToken();
+            const progressCount = Math.min(this.nextValue - 1, this.maxValue);
+            const progressText = `进度：${progressCount} / ${this.maxValue}`;
+
+            if (nextToken) {
+                if (this.mode === 'poem') {
+                    const lineNo = nextToken.group + 1;
+                    const charNo = nextToken.indexInGroup + 1;
+                    lines.push(`下一目标：${nextToken.label}（第${lineNo}行第${charNo}字）`);
+                    const currentLine = this.poemLines[nextToken.group];
+                    if (currentLine) {
+                        lines.push(`当前诗句：${currentLine}`);
+                    }
+                    lines.push(progressText);
+                } else {
+                    lines.push(`下一目标：${nextToken.label}`);
+                    lines.push(progressText);
+                }
+            } else {
+                lines.push('古诗全部收集完成！');
+                lines.push(progressText);
+            }
+        }
+
+        this.scoreText.setText(lines.join('\n'));
         this.updateScoreLayout();
+    }
+
+    private getNextToken(): SequenceToken | undefined {
+        if (!this.contentReady) {
+            return undefined;
+        }
+        if (this.nextValue < 1 || this.nextValue > this.sequenceTokens.length) {
+            return undefined;
+        }
+        return this.sequenceTokens[this.nextValue - 1];
     }
 
     private updateScoreLayout(): void {
@@ -502,7 +669,8 @@ export class Game extends Phaser.Scene {
             return 0;
         }
 
-        const raw = window.localStorage.getItem(BEST_SCORE_KEY);
+        const key = this.bestScoreKey;
+        const raw = key ? window.localStorage.getItem(key) : null;
         if (!raw) {
             return 0;
         }
@@ -516,6 +684,10 @@ export class Game extends Phaser.Scene {
             return;
         }
 
-        window.localStorage.setItem(BEST_SCORE_KEY, value.toString());
+        if (!this.bestScoreKey) {
+            return;
+        }
+
+        window.localStorage.setItem(this.bestScoreKey, value.toString());
     }
 }
