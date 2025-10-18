@@ -4,6 +4,7 @@ import { DifficultyKey, getDifficultyDataPath } from './difficulty';
 export type PoemMeter = 5 | 7;
 
 export interface PoemDefinition {
+    id: string;
     title: string;
     author?: string;
     meter: PoemMeter;
@@ -44,6 +45,8 @@ export function parsePoemCsv(raw: string): PoemDefinition[] {
     if (lines.length > 0 && lines[0].toLowerCase().startsWith('title')) {
         startIndex = 1;
     }
+
+    let poemIndex = 0;
 
     for (let index = startIndex; index < lines.length; index += 1) {
         const line = lines[index];
@@ -88,7 +91,11 @@ export function parsePoemCsv(raw: string): PoemDefinition[] {
             continue;
         }
 
+        const id = createPoemId(title, author, poemIndex);
+        poemIndex += 1;
+
         result.push({
+            id,
             title: title || '未命名',
             author: author || undefined,
             meter: (meterValue === 7 ? 7 : 5),
@@ -97,6 +104,24 @@ export function parsePoemCsv(raw: string): PoemDefinition[] {
     }
 
     return result;
+}
+
+function createPoemId(title: string, author: string | undefined, index: number): string {
+    const safeTitle = sanitizeIdentifier(title || 'untitled');
+    const safeAuthor = sanitizeIdentifier(author || 'unknown');
+    return `${safeTitle}-${safeAuthor}-${index}`;
+}
+
+function sanitizeIdentifier(raw: string): string {
+    if (!raw) {
+        return 'unknown';
+    }
+    return raw
+        .normalize('NFKD')
+        .replace(/[^\p{L}\p{N}]+/gu, '-')
+        .replace(/-+/g, '-')
+        .replace(/^-|-$/g, '')
+        .toLowerCase() || 'unknown';
 }
 
 function parseCsvLine(line: string): string[] {
