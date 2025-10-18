@@ -1,7 +1,8 @@
 import { invoke } from '@tauri-apps/api/core';
 import Phaser from 'phaser';
 import { PLAYFIELD_HEIGHT, PLAYFIELD_WIDTH } from './game/constants';
-import { Game as SnakeGame } from './game/scenes/Game';
+import { Game as GameScene } from './game/scenes/Game';
+import { MainMenu } from './game/scenes/MainMenu';
 
 document.addEventListener('DOMContentLoaded', async () => {
     try {
@@ -18,7 +19,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         backgroundColor: '#cfe8ff',
         pixelArt: true,
         roundPixels: true,
-        scene: [SnakeGame]
+        scene: [MainMenu, GameScene]
     };
 
     new Phaser.Game(config);

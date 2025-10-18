@@ -1,0 +1,34 @@
+{
+  "demo": {
+    "label": "Demo",
+    "type": "demo",
+    "description": "按数字顺序吃豆的演示模式",
+    "maxNumber": 20,
+    "initialBeans": 3
+  },
+  "easy": {
+    "label": "简单",
+    "type": "poem",
+    "title": "静夜思",
+    "author": "唐 · 李白",
+    "description": "五言绝句示例，可直接替换为其他素材",
+    "source": "assets/poems/jing_ye_si.csv",
+    "meter": 5
+  },
+  "medium": {
+    "label": "中等",
+    "type": "poem",
+    "title": "静夜思",
+    "description": "示例配置：可将 source 指向新的诗词文件",
+    "source": "assets/poems/jing_ye_si.csv",
+    "meter": 5
+  },
+  "hard": {
+    "label": "困难",
+    "type": "poem",
+    "title": "静夜思",
+    "description": "示例配置：请在 assets/poems 中准备对应素材",
+    "source": "assets/poems/jing_ye_si.csv",
+    "meter": 5
+  }
+}

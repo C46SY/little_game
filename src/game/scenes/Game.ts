@@ -4,15 +4,26 @@ import {
     GAME_WIDTH,
     GRID_HEIGHT,
     GRID_WIDTH,
+    MAX_SNAKE_LENGTH,
     PLAYFIELD_HEIGHT,
     PLAYFIELD_PADDING_X,
     PLAYFIELD_PADDING_Y,
     PLAYFIELD_WIDTH
 } from '../constants';
 import { createGameTextures } from '../utils/textureFactory';
+import {
+    createDefaultDemoRuntime,
+    DifficultyRuntime
+} from '../utils/difficultyLoader';
 
 type Cell = { x: number; y: number };
-type Bean = { cell: Cell; value: number };
+type Bean = { cell: Cell; order: number; display: string; lineIndex?: number };
+
+type PoemProgress = {
+    nextLineIndex: number;
+    currentLine: string[] | null;
+    currentOriginal: string | null;
+};
 
 enum GameState {
     Running = 'running',
@@ -22,8 +33,7 @@ enum GameState {
 
 const STEP_DELAY = 150; // milliseconds, ~6.5 ticks per second
 const INITIAL_LENGTH = 3;
-const BEST_SCORE_KEY = 'snake-best-score';
-const INITIAL_BEAN_COUNT = 3;
+const BEST_SCORE_KEY_PREFIX = 'snake-best-score';
 
 export class Game extends Phaser.Scene {
     private snakeSprites: Phaser.GameObjects.Sprite[] = [];
@@ -44,16 +54,22 @@ export class Game extends Phaser.Scene {
     private occupancy: Set<string> = new Set();
     private score = 0;
     private bestScore = 0;
+    private bestScoreKey = BEST_SCORE_KEY_PREFIX;
+    private initialBeanCount = 3;
     private state: GameState = GameState.Running;
     private rng!: Phaser.Math.RandomDataGenerator;
+    private difficulty: DifficultyRuntime = createDefaultDemoRuntime();
+    private poemProgress: PoemProgress | null = null;
 
     constructor() {
         super('Game');
     }
 
-    public init(): void {
+    public init(data?: { difficulty?: DifficultyRuntime }): void {
         this.rng = new Phaser.Math.RandomDataGenerator([Date.now().toString()]);
-        this.bestScore = this.loadBestScore();
+        this.difficulty = data?.difficulty ?? createDefaultDemoRuntime();
+        this.bestScoreKey = `${BEST_SCORE_KEY_PREFIX}-${this.difficulty.key}`;
+        this.bestScore = this.loadBestScore(this.bestScoreKey);
     }
 
     public create(): void {
@@ -123,7 +139,20 @@ export class Game extends Phaser.Scene {
         this.hideBeanViews();
         this.nextValue = 1;
         this.nextSpawnValue = 1;
-        this.maxValue = 20;
+
+        if (this.difficulty.type === 'demo') {
+            this.initialBeanCount = Math.max(1, this.difficulty.initialBeans);
+            this.maxValue = Math.max(this.difficulty.maxNumber, this.initialBeanCount);
+            this.poemProgress = null;
+        } else {
+            this.initialBeanCount = 0;
+            this.poemProgress = {
+                nextLineIndex: 0,
+                currentLine: null,
+                currentOriginal: null
+            };
+            this.maxValue = this.difficulty.lines.reduce((sum, line) => sum + line.length, 0);
+        }
 
         const startX = Math.floor(GRID_WIDTH / 2);
         const startY = Math.floor(GRID_HEIGHT / 2);
@@ -224,7 +253,7 @@ export class Game extends Phaser.Scene {
 
         if (beanIndex !== -1) {
             const bean = this.beans[beanIndex];
-            if (bean.value !== this.nextValue) {
+            if (bean.order !== this.nextValue) {
                 this.endGame('顺序错误');
                 return;
             }
@@ -236,12 +265,14 @@ export class Game extends Phaser.Scene {
 
         if (beanIndex !== -1) {
             this.beans.splice(beanIndex, 1);
-            this.pendingGrowth += 1;
+            if (this.snake.length + this.pendingGrowth < MAX_SNAKE_LENGTH) {
+                this.pendingGrowth += 1;
+            }
             this.score += 1;
             this.nextValue += 1;
             if (this.score > this.bestScore) {
                 this.bestScore = this.score;
-                this.saveBestScore(this.bestScore);
+                this.saveBestScore(this.bestScoreKey, this.bestScore);
             }
             this.updateScoreText();
             if (this.nextValue > this.maxValue && this.beans.length === 0) {
@@ -275,15 +306,13 @@ export class Game extends Phaser.Scene {
             return;
         }
         this.state = GameState.Dead;
-        if (reason) {
-            this.gameOverText.setText(`${reason}\nPress SPACE to restart`);
-        } else {
-            this.gameOverText.setText('Game Over\nPress SPACE to restart');
-        }
+        const prompt = '按空格键重新开始';
+        const message = reason ?? '游戏结束';
+        this.gameOverText.setText(`${message}\n${prompt}`);
         this.gameOverText.setVisible(true);
         if (this.score > this.bestScore) {
             this.bestScore = this.score;
-            this.saveBestScore(this.bestScore);
+            this.saveBestScore(this.bestScoreKey, this.bestScore);
         }
         this.updateScoreText();
     }
@@ -293,11 +322,12 @@ export class Game extends Phaser.Scene {
             return;
         }
         this.state = GameState.Win;
-        this.gameOverText.setText('You Win!\nPress SPACE to restart');
+        const title = this.difficulty.type === 'poem' ? '背诵完成！' : '闯关成功！';
+        this.gameOverText.setText(`${title}\n按空格键重新开始`);
         this.gameOverText.setVisible(true);
         if (this.score > this.bestScore) {
             this.bestScore = this.score;
-            this.saveBestScore(this.bestScore);
+            this.saveBestScore(this.bestScoreKey, this.bestScore);
         }
         this.updateScoreText();
     }
@@ -307,14 +337,22 @@ export class Game extends Phaser.Scene {
             return;
         }
 
-        while (this.beans.length < INITIAL_BEAN_COUNT && this.nextSpawnValue <= this.maxValue) {
+        if (this.difficulty.type === 'demo') {
+            this.refillDemoBeans();
+        } else {
+            this.refillPoemBeans();
+        }
+    }
+
+    private refillDemoBeans(): void {
+        while (this.beans.length < this.initialBeanCount && this.nextSpawnValue <= this.maxValue) {
             const cell = this.randomFreeCell();
             if (!cell) {
                 this.handleWin();
                 return;
             }
 
-            this.beans.push({ cell, value: this.nextSpawnValue });
+            this.beans.push({ cell, order: this.nextSpawnValue, display: this.nextSpawnValue.toString() });
             this.occupancy.add(this.cellKey(cell));
             this.nextSpawnValue += 1;
         }
@@ -322,6 +360,52 @@ export class Game extends Phaser.Scene {
         if (this.nextValue > this.maxValue && this.beans.length === 0) {
             this.handleWin();
         }
+    }
+
+    private refillPoemBeans(): void {
+        if (this.beans.length > 0) {
+            return;
+        }
+
+        if (!this.poemProgress) {
+            return;
+        }
+
+        if (this.difficulty.type !== 'poem') {
+            return;
+        }
+
+        if (this.poemProgress.nextLineIndex >= this.difficulty.lines.length) {
+            this.handleWin();
+            return;
+        }
+
+        const poem = this.difficulty;
+        const lineIndex = this.poemProgress.nextLineIndex;
+        const characters = poem.lines[lineIndex];
+        const original = poem.originalLines[lineIndex] ?? characters.join('');
+        for (let i = 0; i < characters.length; i += 1) {
+            const cell = this.randomFreeCell();
+            if (!cell) {
+                this.handleWin();
+                return;
+            }
+
+            const bean: Bean = {
+                cell,
+                order: this.nextSpawnValue,
+                display: characters[i],
+                lineIndex
+            };
+            this.beans.push(bean);
+            this.occupancy.add(this.cellKey(cell));
+            this.nextSpawnValue += 1;
+        }
+
+        this.poemProgress.currentLine = characters;
+        this.poemProgress.currentOriginal = original;
+        this.poemProgress.nextLineIndex += 1;
+        this.updateScoreText();
     }
 
     private randomFreeCell(): Cell | null {
@@ -385,7 +469,7 @@ export class Game extends Phaser.Scene {
 
             const label = this.getBeanLabel(i);
             label.setPosition(centerX, centerY + 2);
-            label.setText(bean.value.toString());
+            label.setText(bean.display);
             label.setVisible(true);
             label.setActive(true);
         }
@@ -482,10 +566,29 @@ export class Game extends Phaser.Scene {
     }
 
     private updateScoreText(): void {
-        const progress = this.nextValue <= this.maxValue
-            ? `Next: ${this.nextValue} / ${this.maxValue}`
-            : `Completed: ${this.maxValue} / ${this.maxValue}`;
-        this.scoreText.setText(`Score: ${this.score} (Best: ${this.bestScore})\n${progress}`);
+        const lines: string[] = [];
+        lines.push(`模式：${this.difficulty.label}`);
+        lines.push(`得分：${this.score} (最佳：${this.bestScore})`);
+
+        if (this.difficulty.type === 'demo') {
+            const nextNumber = this.nextValue <= this.maxValue
+                ? `${this.nextValue} / ${this.maxValue}`
+                : `${this.maxValue} / ${this.maxValue}`;
+            lines.push(`下一数字：${nextNumber}`);
+        } else {
+            const completed = Math.min(this.nextValue - 1, this.maxValue);
+            lines.push(`诗词：${this.difficulty.title}`);
+            lines.push(`进度：${completed} / ${this.maxValue}`);
+            if (this.poemProgress?.currentOriginal) {
+                lines.push(`原句：${this.poemProgress.currentOriginal}`);
+            }
+            if (this.poemProgress?.currentLine) {
+                const displayLine = this.poemProgress.currentLine.join(' ');
+                lines.push(`当前行：${displayLine}`);
+            }
+        }
+
+        this.scoreText.setText(lines.join('\n'));
         this.updateScoreLayout();
     }
 
@@ -497,12 +600,12 @@ export class Game extends Phaser.Scene {
         this.scoreText.setPosition(x, y);
     }
 
-    private loadBestScore(): number {
+    private loadBestScore(key: string): number {
         if (typeof window === 'undefined' || !window.localStorage) {
             return 0;
         }
 
-        const raw = window.localStorage.getItem(BEST_SCORE_KEY);
+        const raw = window.localStorage.getItem(key);
         if (!raw) {
             return 0;
         }
@@ -511,11 +614,11 @@ export class Game extends Phaser.Scene {
         return Number.isFinite(value) ? value : 0;
     }
 
-    private saveBestScore(value: number): void {
+    private saveBestScore(key: string, value: number): void {
         if (typeof window === 'undefined' || !window.localStorage) {
             return;
         }
 
-        window.localStorage.setItem(BEST_SCORE_KEY, value.toString());
+        window.localStorage.setItem(key, value.toString());
     }
 }
