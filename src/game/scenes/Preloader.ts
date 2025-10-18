@@ -1,4 +1,6 @@
 import { Scene } from 'phaser';
+import { DIFFICULTY_ORDER, getDifficultyDataPath } from '../data/difficulty';
+import { getPoemCacheKey } from '../data/poems';
 import { createGameTextures } from '../utils/textureFactory';
 
 export class Preloader extends Scene
@@ -34,6 +36,13 @@ export class Preloader extends Scene
         this.load.setPath('assets');
 
         this.load.image('logo', 'logo.png');
+
+        DIFFICULTY_ORDER.forEach((difficulty) => {
+            const path = getDifficultyDataPath(difficulty);
+            if (path) {
+                this.load.text(getPoemCacheKey(difficulty), path);
+            }
+        });
     }
 
     create ()

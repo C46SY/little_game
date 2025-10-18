@@ -4,15 +4,19 @@ import {
     GAME_WIDTH,
     GRID_HEIGHT,
     GRID_WIDTH,
+    MAX_SNAKE_LENGTH,
     PLAYFIELD_HEIGHT,
     PLAYFIELD_PADDING_X,
     PLAYFIELD_PADDING_Y,
     PLAYFIELD_WIDTH
 } from '../constants';
+import { DifficultyKey, getDifficultyInfo } from '../data/difficulty';
+import { loadPoemsFromCache, PoemDefinition } from '../data/poems';
+import { BeanSequence, BeanToken, DemoSequence, PoemSequence } from '../logic/beanSequences';
 import { createGameTextures } from '../utils/textureFactory';
 
 type Cell = { x: number; y: number };
-type Bean = { cell: Cell; value: number };
+type Bean = { cell: Cell; token: BeanToken };
 
 enum GameState {
     Running = 'running',
@@ -22,8 +26,21 @@ enum GameState {
 
 const STEP_DELAY = 150; // milliseconds, ~6.5 ticks per second
 const INITIAL_LENGTH = 3;
-const BEST_SCORE_KEY = 'snake-best-score';
-const INITIAL_BEAN_COUNT = 3;
+const BEST_SCORE_KEY_PREFIX = 'snake-best-score';
+const DEMO_TOTAL_TOKENS = 20;
+const DEMO_ACTIVE_BEANS = 3;
+
+const FALLBACK_POEM: PoemDefinition = {
+    title: '静夜思',
+    author: '李白',
+    meter: 5,
+    lines: [
+        '床前明月光，',
+        '疑是地上霜。',
+        '举头望明月，',
+        '低头思故乡。'
+    ]
+};
 
 export class Game extends Phaser.Scene {
     private snakeSprites: Phaser.GameObjects.Sprite[] = [];
@@ -38,22 +55,39 @@ export class Game extends Phaser.Scene {
     private directionQueue: Cell[] = [];
     private pendingGrowth = 0;
     private beans: Bean[] = [];
-    private nextValue = 1;
-    private nextSpawnValue = 1;
-    private maxValue = 20;
     private occupancy: Set<string> = new Set();
     private score = 0;
     private bestScore = 0;
     private state: GameState = GameState.Running;
     private rng!: Phaser.Math.RandomDataGenerator;
+    private difficulty: DifficultyKey = 'easy';
+    private sequence!: BeanSequence;
+    private bestScoreKey = `${BEST_SCORE_KEY_PREFIX}-easy`;
 
     constructor() {
         super('Game');
     }
 
-    public init(): void {
+    private createSequence(): BeanSequence {
+        if (this.difficulty === 'demo') {
+            return new DemoSequence(DEMO_TOTAL_TOKENS, DEMO_ACTIVE_BEANS);
+        }
+
+        const poems = loadPoemsFromCache(this, this.difficulty);
+        const pool = poems.length > 0 ? poems : [FALLBACK_POEM];
+        const index = this.rng.between(0, pool.length - 1);
+        return new PoemSequence(this.difficulty, pool[index]);
+    }
+
+    public init(data: { difficulty?: DifficultyKey } = {}): void {
         this.rng = new Phaser.Math.RandomDataGenerator([Date.now().toString()]);
+        const registryDifficulty = this.registry.get('difficulty') as DifficultyKey | undefined;
+        this.difficulty = data?.difficulty ?? registryDifficulty ?? 'easy';
+        this.registry.set('difficulty', this.difficulty);
+        this.sequence = this.createSequence();
+        this.bestScoreKey = `${BEST_SCORE_KEY_PREFIX}-${this.difficulty}`;
         this.bestScore = this.loadBestScore();
+        this.score = 0;
     }
 
     public create(): void {
@@ -72,7 +106,7 @@ export class Game extends Phaser.Scene {
         this.scoreText.setShadow(2, 2, 'rgba(154, 208, 245, 0.6)', 0, true, true);
         this.scoreText.setDepth(5);
 
-        this.gameOverText = this.add.text(PLAYFIELD_WIDTH / 2, PLAYFIELD_HEIGHT / 2, 'Game Over\nPress SPACE to restart', {
+        this.gameOverText = this.add.text(PLAYFIELD_WIDTH / 2, PLAYFIELD_HEIGHT / 2, '游戏结束\n按 SPACE 键重新开始', {
             fontFamily: '"Fredoka", "Comic Sans MS", "Arial Rounded MT Bold", sans-serif',
             fontSize: '48px',
             color: '#ff6b81',
@@ -121,9 +155,8 @@ export class Game extends Phaser.Scene {
         this.beans = [];
         this.hideSnakeSprites();
         this.hideBeanViews();
-        this.nextValue = 1;
-        this.nextSpawnValue = 1;
-        this.maxValue = 20;
+        this.sequence.reset();
+        this.score = this.sequence.getConsumedCount();
 
         const startX = Math.floor(GRID_WIDTH / 2);
         const startY = Math.floor(GRID_HEIGHT / 2);
@@ -224,7 +257,7 @@ export class Game extends Phaser.Scene {
 
         if (beanIndex !== -1) {
             const bean = this.beans[beanIndex];
-            if (bean.value !== this.nextValue) {
+            if (!this.sequence.consume(bean.token)) {
                 this.endGame('顺序错误');
                 return;
             }
@@ -236,15 +269,15 @@ export class Game extends Phaser.Scene {
 
         if (beanIndex !== -1) {
             this.beans.splice(beanIndex, 1);
-            this.pendingGrowth += 1;
-            this.score += 1;
-            this.nextValue += 1;
+            const availableGrowth = Math.max(0, MAX_SNAKE_LENGTH - this.snake.length);
+            this.pendingGrowth = Math.min(this.pendingGrowth + 1, availableGrowth);
+            this.score = this.sequence.getConsumedCount();
             if (this.score > this.bestScore) {
                 this.bestScore = this.score;
                 this.saveBestScore(this.bestScore);
             }
             this.updateScoreText();
-            if (this.nextValue > this.maxValue && this.beans.length === 0) {
+            if (this.sequence.isComplete() && this.beans.length === 0) {
                 this.handleWin();
                 return;
             }
@@ -276,9 +309,9 @@ export class Game extends Phaser.Scene {
         }
         this.state = GameState.Dead;
         if (reason) {
-            this.gameOverText.setText(`${reason}\nPress SPACE to restart`);
+            this.gameOverText.setText(`${reason}\n按 SPACE 键重新开始`);
         } else {
-            this.gameOverText.setText('Game Over\nPress SPACE to restart');
+            this.gameOverText.setText('游戏结束\n按 SPACE 键重新开始');
         }
         this.gameOverText.setVisible(true);
         if (this.score > this.bestScore) {
@@ -293,7 +326,7 @@ export class Game extends Phaser.Scene {
             return;
         }
         this.state = GameState.Win;
-        this.gameOverText.setText('You Win!\nPress SPACE to restart');
+        this.gameOverText.setText('全部完成！\n按 SPACE 键重新开始');
         this.gameOverText.setVisible(true);
         if (this.score > this.bestScore) {
             this.bestScore = this.score;
@@ -307,19 +340,18 @@ export class Game extends Phaser.Scene {
             return;
         }
 
-        while (this.beans.length < INITIAL_BEAN_COUNT && this.nextSpawnValue <= this.maxValue) {
+        const newTokens = this.sequence.requestTokens(this.beans.length);
+        for (const token of newTokens) {
             const cell = this.randomFreeCell();
             if (!cell) {
                 this.handleWin();
                 return;
             }
-
-            this.beans.push({ cell, value: this.nextSpawnValue });
+            this.beans.push({ cell, token });
             this.occupancy.add(this.cellKey(cell));
-            this.nextSpawnValue += 1;
         }
 
-        if (this.nextValue > this.maxValue && this.beans.length === 0) {
+        if (this.sequence.isComplete() && this.beans.length === 0) {
             this.handleWin();
         }
     }
@@ -385,7 +417,7 @@ export class Game extends Phaser.Scene {
 
             const label = this.getBeanLabel(i);
             label.setPosition(centerX, centerY + 2);
-            label.setText(bean.value.toString());
+            label.setText(bean.token.label);
             label.setVisible(true);
             label.setActive(true);
         }
@@ -482,10 +514,22 @@ export class Game extends Phaser.Scene {
     }
 
     private updateScoreText(): void {
-        const progress = this.nextValue <= this.maxValue
-            ? `Next: ${this.nextValue} / ${this.maxValue}`
-            : `Completed: ${this.maxValue} / ${this.maxValue}`;
-        this.scoreText.setText(`Score: ${this.score} (Best: ${this.bestScore})\n${progress}`);
+        const difficultyInfo = getDifficultyInfo(this.difficulty);
+        const total = this.sequence.totalTokens || 0;
+        const consumed = this.sequence.getConsumedCount();
+        const nextLabel = this.sequence.getNextTokenLabel();
+        const lineProgress = this.sequence.getLineProgress();
+
+        const lines: string[] = [];
+        lines.push(`难度：${difficultyInfo.label}｜${difficultyInfo.description}`);
+        lines.push(this.sequence.summary);
+        lines.push(`得分：${consumed}${total > 0 ? ` / ${total}` : ''}（历史最佳：${this.bestScore}）`);
+        if (lineProgress) {
+            lines.push(lineProgress);
+        }
+        lines.push(nextLabel ? `下一目标：${nextLabel}` : '所有目标完成！');
+
+        this.scoreText.setText(lines.join('\n'));
         this.updateScoreLayout();
     }
 
@@ -502,7 +546,7 @@ export class Game extends Phaser.Scene {
             return 0;
         }
 
-        const raw = window.localStorage.getItem(BEST_SCORE_KEY);
+        const raw = window.localStorage.getItem(this.bestScoreKey);
         if (!raw) {
             return 0;
         }
@@ -516,6 +560,6 @@ export class Game extends Phaser.Scene {
             return;
         }
 
-        window.localStorage.setItem(BEST_SCORE_KEY, value.toString());
+        window.localStorage.setItem(this.bestScoreKey, value.toString());
     }
 }
