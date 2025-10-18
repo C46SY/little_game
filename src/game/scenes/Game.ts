@@ -4,15 +4,18 @@ import {
     GAME_WIDTH,
     GRID_HEIGHT,
     GRID_WIDTH,
+    MAX_SNAKE_LENGTH,
     PLAYFIELD_HEIGHT,
     PLAYFIELD_PADDING_X,
     PLAYFIELD_PADDING_Y,
     PLAYFIELD_WIDTH
 } from '../constants';
+import { DifficultyDefinition, DifficultyId, getDifficulty } from '../utils/difficulty';
+import { PoemContent, parsePoemText } from '../utils/poemLoader';
 import { createGameTextures } from '../utils/textureFactory';
 
 type Cell = { x: number; y: number };
-type Bean = { cell: Cell; value: number };
+type Bean = { cell: Cell; tokenIndex: number; label: string };
 
 enum GameState {
     Running = 'running',
@@ -38,9 +41,15 @@ export class Game extends Phaser.Scene {
     private directionQueue: Cell[] = [];
     private pendingGrowth = 0;
     private beans: Bean[] = [];
-    private nextValue = 1;
-    private nextSpawnValue = 1;
-    private maxValue = 20;
+    private nextTokenIndex = 0;
+    private nextSpawnIndex = 0;
+    private totalTokens = 20;
+    private spawnBatchSize = INITIAL_BEAN_COUNT;
+    private difficultyId: DifficultyId = 'demo';
+    private difficulty?: DifficultyDefinition;
+    private mode: 'numbers' | 'poem' = 'numbers';
+    private poemContent?: PoemContent;
+    private poemLineSpawnIndex = 0;
     private occupancy: Set<string> = new Set();
     private score = 0;
     private bestScore = 0;
@@ -51,9 +60,20 @@ export class Game extends Phaser.Scene {
         super('Game');
     }
 
-    public init(): void {
+    public init(data?: { difficulty?: DifficultyId }): void {
+        if (data?.difficulty) {
+            this.difficultyId = data.difficulty;
+        }
         this.rng = new Phaser.Math.RandomDataGenerator([Date.now().toString()]);
         this.bestScore = this.loadBestScore();
+        this.difficulty = getDifficulty(this, this.difficultyId);
+    }
+
+    public preload(): void {
+        if (this.difficulty?.mode === 'poem' && this.difficulty.resource) {
+            this.load.setPath('assets');
+            this.load.text(this.getPoemCacheKey(), this.difficulty.resource);
+        }
     }
 
     public create(): void {
@@ -99,6 +119,7 @@ export class Game extends Phaser.Scene {
             this.beanLabels = [];
         });
 
+        this.configureDifficulty();
         this.resetGame();
 
         this.stepEvent = this.time.addEvent({
@@ -107,6 +128,28 @@ export class Game extends Phaser.Scene {
             callback: this.step,
             callbackScope: this
         });
+    }
+
+    private configureDifficulty(): void {
+        this.mode = this.difficulty?.mode ?? 'numbers';
+        this.spawnBatchSize = this.difficulty?.initialBeans ?? INITIAL_BEAN_COUNT;
+        this.poemContent = undefined;
+        this.totalTokens = this.difficulty?.maxValue ?? 20;
+        this.nextTokenIndex = 0;
+        this.nextSpawnIndex = 0;
+        this.poemLineSpawnIndex = 0;
+
+        if (this.mode === 'poem') {
+            const cacheKey = this.getPoemCacheKey();
+            const raw = this.cache.text.get(cacheKey) as string | undefined;
+            if (!raw || raw.length === 0) {
+                console.warn(`未能加载难度 "${this.difficultyId}" 的诗词资源。`);
+                this.totalTokens = 0;
+                return;
+            }
+            this.poemContent = parsePoemText(raw, this.difficulty?.meterHint);
+            this.totalTokens = this.poemContent.totalCharacters;
+        }
     }
 
     private resetGame(): void {
@@ -121,9 +164,12 @@ export class Game extends Phaser.Scene {
         this.beans = [];
         this.hideSnakeSprites();
         this.hideBeanViews();
-        this.nextValue = 1;
-        this.nextSpawnValue = 1;
-        this.maxValue = 20;
+        this.nextTokenIndex = 0;
+        this.nextSpawnIndex = 0;
+        this.poemLineSpawnIndex = 0;
+        this.totalTokens = this.mode === 'numbers'
+            ? (this.difficulty?.maxValue ?? this.totalTokens)
+            : (this.poemContent?.totalCharacters ?? this.totalTokens);
 
         const startX = Math.floor(GRID_WIDTH / 2);
         const startY = Math.floor(GRID_HEIGHT / 2);
@@ -224,7 +270,7 @@ export class Game extends Phaser.Scene {
 
         if (beanIndex !== -1) {
             const bean = this.beans[beanIndex];
-            if (bean.value !== this.nextValue) {
+            if (bean.tokenIndex !== this.nextTokenIndex) {
                 this.endGame('顺序错误');
                 return;
             }
@@ -236,20 +282,22 @@ export class Game extends Phaser.Scene {
 
         if (beanIndex !== -1) {
             this.beans.splice(beanIndex, 1);
-            this.pendingGrowth += 1;
+            if (this.snake.length + this.pendingGrowth < MAX_SNAKE_LENGTH) {
+                this.pendingGrowth += 1;
+            }
             this.score += 1;
-            this.nextValue += 1;
+            this.nextTokenIndex += 1;
             if (this.score > this.bestScore) {
                 this.bestScore = this.score;
                 this.saveBestScore(this.bestScore);
             }
             this.updateScoreText();
-            if (this.nextValue > this.maxValue && this.beans.length === 0) {
-                this.handleWin();
-                return;
-            }
             this.refillBeans();
             if (this.state !== GameState.Running) {
+                return;
+            }
+            if (this.nextTokenIndex >= this.totalTokens && this.beans.length === 0) {
+                this.handleWin();
                 return;
             }
         }
@@ -307,21 +355,55 @@ export class Game extends Phaser.Scene {
             return;
         }
 
-        while (this.beans.length < INITIAL_BEAN_COUNT && this.nextSpawnValue <= this.maxValue) {
+        if (this.mode === 'poem') {
+            this.refillPoemBeans();
+        } else {
+            this.refillNumberBeans();
+        }
+    }
+
+    private refillNumberBeans(): void {
+        while (this.beans.length < this.spawnBatchSize && this.nextSpawnIndex < this.totalTokens) {
             const cell = this.randomFreeCell();
             if (!cell) {
                 this.handleWin();
                 return;
             }
 
-            this.beans.push({ cell, value: this.nextSpawnValue });
+            const tokenIndex = this.nextSpawnIndex;
+            const label = (tokenIndex + 1).toString();
+            this.beans.push({ cell, tokenIndex, label });
             this.occupancy.add(this.cellKey(cell));
-            this.nextSpawnValue += 1;
+            this.nextSpawnIndex += 1;
+        }
+    }
+
+    private refillPoemBeans(): void {
+        if (!this.poemContent) {
+            return;
+        }
+        if (this.beans.length > 0) {
+            return;
+        }
+        if (this.poemLineSpawnIndex >= this.poemContent.lines.length) {
+            return;
         }
 
-        if (this.nextValue > this.maxValue && this.beans.length === 0) {
-            this.handleWin();
+        const line = this.poemContent.lines[this.poemLineSpawnIndex];
+        for (let i = 0; i < line.length; i += 1) {
+            const cell = this.randomFreeCell();
+            if (!cell) {
+                this.handleWin();
+                return;
+            }
+            const tokenIndex = this.nextSpawnIndex;
+            const label = line[i];
+            this.beans.push({ cell, tokenIndex, label });
+            this.occupancy.add(this.cellKey(cell));
+            this.nextSpawnIndex += 1;
         }
+
+        this.poemLineSpawnIndex += 1;
     }
 
     private randomFreeCell(): Cell | null {
@@ -385,7 +467,7 @@ export class Game extends Phaser.Scene {
 
             const label = this.getBeanLabel(i);
             label.setPosition(centerX, centerY + 2);
-            label.setText(bean.value.toString());
+            label.setText(bean.label);
             label.setVisible(true);
             label.setActive(true);
         }
@@ -482,10 +564,27 @@ export class Game extends Phaser.Scene {
     }
 
     private updateScoreText(): void {
-        const progress = this.nextValue <= this.maxValue
-            ? `Next: ${this.nextValue} / ${this.maxValue}`
-            : `Completed: ${this.maxValue} / ${this.maxValue}`;
-        this.scoreText.setText(`Score: ${this.score} (Best: ${this.bestScore})\n${progress}`);
+        const difficultyLabel = this.difficulty?.label ?? this.difficultyId;
+        const tokensTotal = Math.max(this.totalTokens, 1);
+        const header = `得分: ${this.score} (最佳: ${this.bestScore})`;
+
+        if (this.mode === 'poem') {
+            const poemTitle = this.difficulty?.title ?? '诗词模式';
+            const poemAuthor = this.difficulty?.author ? ` · ${this.difficulty?.author}` : '';
+            const poemInfo = `诗词: ${poemTitle}${poemAuthor}`;
+            if (!this.poemContent || this.totalTokens === 0) {
+                this.scoreText.setText(`${header}\n难度: ${difficultyLabel}\n${poemInfo}\n进度: 未能加载诗词内容`);
+            } else {
+                const progressText = this.getPoemProgressText();
+                const nextLabel = this.getNextTokenLabel();
+                const stepInfo = `${Math.min(this.nextTokenIndex + 1, tokensTotal)} / ${tokensTotal}`;
+                this.scoreText.setText(`${header}\n难度: ${difficultyLabel}\n${poemInfo}\n${progressText}\n下一字: ${nextLabel} (${stepInfo})`);
+            }
+        } else {
+            const nextLabel = this.getNextTokenLabel();
+            const stepInfo = `${Math.min(this.nextTokenIndex + 1, tokensTotal)} / ${tokensTotal}`;
+            this.scoreText.setText(`${header}\n难度: ${difficultyLabel}\n下一个: ${nextLabel} (${stepInfo})`);
+        }
         this.updateScoreLayout();
     }
 
@@ -495,6 +594,68 @@ export class Game extends Phaser.Scene {
         const x = Math.floor(PLAYFIELD_PADDING_X + (GAME_WIDTH - width) / 2);
         const y = Math.max(16, Math.floor(PLAYFIELD_PADDING_Y - height - 16));
         this.scoreText.setPosition(x, y);
+    }
+
+    private getPoemProgressText(): string {
+        if (!this.poemContent || this.poemContent.lines.length === 0) {
+            return '进度: 暂无可用诗句';
+        }
+        if (this.totalTokens === 0) {
+            return '进度: 0 / 0';
+        }
+
+        const totalLines = this.poemContent.lines.length;
+        const isComplete = this.nextTokenIndex >= this.totalTokens;
+        const targetIndex = isComplete ? this.totalTokens - 1 : this.nextTokenIndex;
+        const clampedIndex = Math.max(targetIndex, 0);
+        const { lineIndex, charIndex } = this.getPoemLineInfo(clampedIndex);
+        const lineNumber = Math.min(lineIndex + 1, totalLines);
+        const line = this.poemContent.lines[lineIndex] ?? [];
+        const lineLength = line.length > 0 ? line.length : this.poemContent.lineLength;
+        const charPosition = isComplete ? line.length : charIndex + 1;
+        const charText = lineLength > 0 ? `• 第${Math.min(charPosition, lineLength)}字 / ${lineLength}字` : '';
+        return `进度: 第${lineNumber}行 / ${totalLines}行 ${charText}`.trim();
+    }
+
+    private getNextTokenLabel(): string {
+        if (this.nextTokenIndex >= this.totalTokens) {
+            return '完成';
+        }
+        if (this.mode === 'poem' && this.poemContent) {
+            const { lineIndex, charIndex } = this.getPoemLineInfo(this.nextTokenIndex);
+            const line = this.poemContent.lines[lineIndex];
+            if (line && charIndex >= 0 && charIndex < line.length) {
+                return line[charIndex];
+            }
+            return '完成';
+        }
+        return (this.nextTokenIndex + 1).toString();
+    }
+
+    private getPoemLineInfo(tokenIndex: number): { lineIndex: number; charIndex: number } {
+        if (!this.poemContent || this.poemContent.lines.length === 0) {
+            return { lineIndex: 0, charIndex: 0 };
+        }
+
+        let remaining = tokenIndex;
+        for (let lineIndex = 0; lineIndex < this.poemContent.lines.length; lineIndex += 1) {
+            const line = this.poemContent.lines[lineIndex];
+            if (remaining < line.length) {
+                return { lineIndex, charIndex: Math.max(0, remaining) };
+            }
+            remaining -= line.length;
+        }
+
+        const lastIndex = this.poemContent.lines.length - 1;
+        const lastLine = this.poemContent.lines[lastIndex];
+        return {
+            lineIndex: lastIndex,
+            charIndex: Math.max(0, (lastLine?.length ?? 1) - 1)
+        };
+    }
+
+    private getPoemCacheKey(): string {
+        return `poem-${this.difficultyId}`;
     }
 
     private loadBestScore(): number {

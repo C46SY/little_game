@@ -7,3 +7,4 @@ export const PLAYFIELD_WIDTH = 1024;
 export const PLAYFIELD_HEIGHT = 768;
 export const PLAYFIELD_PADDING_X = Math.floor((PLAYFIELD_WIDTH - GAME_WIDTH) / 2);
 export const PLAYFIELD_PADDING_Y = Math.floor((PLAYFIELD_HEIGHT - GAME_HEIGHT) / 2);
+export const MAX_SNAKE_LENGTH = 10;

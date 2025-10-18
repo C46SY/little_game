@@ -1,0 +1,36 @@
+{
+  "order": ["easy", "medium", "hard", "demo"],
+  "difficulties": {
+    "demo": {
+      "label": "Demo（数字）",
+      "mode": "numbers",
+      "maxValue": 20,
+      "initialBeans": 3,
+      "description": "按数字顺序吃豆的演示模式"
+    },
+    "easy": {
+      "label": "简单",
+      "mode": "poem",
+      "resource": "poems/jing_ye_si.csv",
+      "title": "静夜思",
+      "author": "李白",
+      "description": "五言·床前明月光"
+    },
+    "medium": {
+      "label": "中等",
+      "mode": "poem",
+      "resource": "poems/jing_ye_si.csv",
+      "title": "静夜思",
+      "author": "李白",
+      "description": "可在 assets/poems 中替换为其他诗词"
+    },
+    "hard": {
+      "label": "困难",
+      "mode": "poem",
+      "resource": "poems/jing_ye_si.csv",
+      "title": "静夜思",
+      "author": "李白",
+      "description": "预留难度，新增诗词时更新本配置即可"
+    }
+  }
+}

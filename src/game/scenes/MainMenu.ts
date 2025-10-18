@@ -1,10 +1,15 @@
-import { Scene, GameObjects } from 'phaser';
+import Phaser, { GameObjects, Scene } from 'phaser';
+import { DifficultyDefinition, getDifficultyList } from '../utils/difficulty';
 
 export class MainMenu extends Scene
 {
     background: GameObjects.Image;
     logo: GameObjects.Image;
     title: GameObjects.Text;
+    private difficultyButton!: GameObjects.Text;
+    private descriptionText!: GameObjects.Text;
+    private options: DifficultyDefinition[] = [];
+    private selectedIndex = 0;
 
     constructor ()
     {
@@ -26,23 +31,100 @@ export class MainMenu extends Scene
         this.title.setShadow(3, 3, 'rgba(154, 208, 245, 0.6)', 0, true, true);
         this.title.setStroke('#ffffff', 10);
 
-        const prompt = this.add.text(512, 520, '点击或按任意键开始冒险！', {
+        this.options = getDifficultyList(this);
+        this.selectedIndex = Math.max(0, this.options.findIndex((option) => option.id === 'easy'));
+        if (this.selectedIndex === -1) {
+            this.selectedIndex = 0;
+        }
+
+        this.createButton(512, 520, '开始游戏', () => this.startGame());
+        this.difficultyButton = this.createButton(512, 600, '', () => this.cycleDifficulty(1));
+
+        this.descriptionText = this.add.text(512, 660, '', {
             fontFamily: '"Fredoka", "Comic Sans MS", "Arial Rounded MT Bold", sans-serif',
-            fontSize: 28,
+            fontSize: 22,
+            color: '#2c3e50',
+            align: 'center',
+            backgroundColor: 'rgba(255,255,255,0.85)'
+        }).setOrigin(0.5);
+        this.descriptionText.setPadding(18, 12, 18, 12);
+        this.descriptionText.setShadow(2, 2, 'rgba(154, 208, 245, 0.6)', 0, true, true);
+
+        this.updateDifficultyDisplay();
+
+        this.input.keyboard?.on('keydown', this.handleKeyDown, this);
+        this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+            this.input.keyboard?.off('keydown', this.handleKeyDown, this);
+        });
+    }
+
+    private createButton(x: number, y: number, text: string, onClick: () => void): GameObjects.Text {
+        const button = this.add.text(x, y, text, {
+            fontFamily: '"Fredoka", "Comic Sans MS", "Arial Rounded MT Bold", sans-serif',
+            fontSize: 32,
             color: '#ff6b81',
             align: 'center',
-            backgroundColor: 'rgba(255,255,255,0.9)'
+            backgroundColor: 'rgba(255,255,255,0.95)'
         }).setOrigin(0.5);
-        prompt.setPadding(20, 12, 20, 12);
-        prompt.setShadow(2, 2, 'rgba(255, 166, 201, 0.5)', 0, true, true);
+        button.setPadding(26, 14, 26, 14);
+        button.setShadow(3, 3, 'rgba(255, 166, 201, 0.5)', 0, true, true);
+        button.setStroke('#ffe3e3', 6);
+        button.setInteractive({ useHandCursor: true })
+            .on('pointerover', () => button.setStyle({ color: '#ff4757' }))
+            .on('pointerout', () => button.setStyle({ color: '#ff6b81' }))
+            .on('pointerdown', onClick);
+        return button;
+    }
 
-        this.input.once('pointerdown', () => {
+    private handleKeyDown(event: KeyboardEvent): void {
+        switch (event.code) {
+            case 'Enter':
+            case 'Space':
+                this.startGame();
+                break;
+            case 'ArrowLeft':
+            case 'KeyA':
+                this.cycleDifficulty(-1);
+                break;
+            case 'ArrowRight':
+            case 'KeyD':
+                this.cycleDifficulty(1);
+                break;
+            default:
+                break;
+        }
+    }
 
-            this.scene.start('Game');
+    private cycleDifficulty(direction: number): void {
+        if (this.options.length === 0) {
+            return;
+        }
+        const length = this.options.length;
+        this.selectedIndex = (this.selectedIndex + direction + length) % length;
+        this.updateDifficultyDisplay();
+    }
 
-        });
-        this.input.keyboard?.once('keydown', () => {
-            this.scene.start('Game');
-        });
+    private updateDifficultyDisplay(): void {
+        const current = this.options[this.selectedIndex];
+        if (!current) {
+            this.difficultyButton.setText('难度：未配置');
+            this.descriptionText.setText('无法读取难度配置');
+            return;
+        }
+
+        this.difficultyButton.setText(`难度：${current.label}`);
+        const poemInfo = current.mode === 'poem'
+            ? [current.title, current.author].filter(Boolean).join(' · ')
+            : '按数字顺序吃豆的演示模式';
+        const description = current.description ?? poemInfo;
+        this.descriptionText.setText(description);
+    }
+
+    private startGame(): void {
+        const current = this.options[this.selectedIndex];
+        if (!current) {
+            return;
+        }
+        this.scene.start('Game', { difficulty: current.id });
     }
 }
