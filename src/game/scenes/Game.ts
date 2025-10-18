@@ -63,6 +63,7 @@ export class Game extends Phaser.Scene {
     private difficulty: DifficultyKey = 'easy';
     private sequence!: BeanSequence;
     private bestScoreKey = `${BEST_SCORE_KEY_PREFIX}-easy`;
+    private selectedPoemIndex: number | null = null;
 
     constructor() {
         super('Game');
@@ -74,16 +75,25 @@ export class Game extends Phaser.Scene {
         }
 
         const poems = loadPoemsFromCache(this, this.difficulty);
-        const pool = poems.length > 0 ? poems : [FALLBACK_POEM];
-        const index = this.rng.between(0, pool.length - 1);
-        return new PoemSequence(this.difficulty, pool[index]);
+        if (poems.length > 0) {
+            if (this.selectedPoemIndex !== null && this.selectedPoemIndex >= 0 && this.selectedPoemIndex < poems.length) {
+                return new PoemSequence(this.difficulty, poems[this.selectedPoemIndex]);
+            }
+            const index = this.rng.between(0, poems.length - 1);
+            return new PoemSequence(this.difficulty, poems[index]);
+        }
+        return new PoemSequence(this.difficulty, FALLBACK_POEM);
     }
 
-    public init(data: { difficulty?: DifficultyKey } = {}): void {
+    public init(data: { difficulty?: DifficultyKey; poemIndex?: number } = {}): void {
         this.rng = new Phaser.Math.RandomDataGenerator([Date.now().toString()]);
         const registryDifficulty = this.registry.get('difficulty') as DifficultyKey | undefined;
         this.difficulty = data?.difficulty ?? registryDifficulty ?? 'easy';
         this.registry.set('difficulty', this.difficulty);
+        const incomingPoemIndex = data?.poemIndex;
+        this.selectedPoemIndex = typeof incomingPoemIndex === 'number' && Number.isInteger(incomingPoemIndex)
+            ? incomingPoemIndex
+            : null;
         this.sequence = this.createSequence();
         this.bestScoreKey = `${BEST_SCORE_KEY_PREFIX}-${this.difficulty}`;
         this.bestScore = this.loadBestScore();
@@ -97,16 +107,17 @@ export class Game extends Phaser.Scene {
 
         this.scoreText = this.add.text(0, 0, '', {
             fontFamily: '"Fredoka", "Comic Sans MS", "Arial Rounded MT Bold", sans-serif',
-            fontSize: '28px',
+            fontSize: '24px',
             color: '#2c3e50',
-            align: 'left'
+            align: 'left',
+            wordWrap: { width: 220, useAdvancedWrap: true }
         });
         this.scoreText.setPadding(18, 12, 18, 12);
         this.scoreText.setBackgroundColor('rgba(255,255,255,0.85)');
         this.scoreText.setShadow(2, 2, 'rgba(154, 208, 245, 0.6)', 0, true, true);
         this.scoreText.setDepth(5);
 
-        this.gameOverText = this.add.text(PLAYFIELD_WIDTH / 2, PLAYFIELD_HEIGHT / 2, '游戏结束\n按 SPACE 键重新开始', {
+        this.gameOverText = this.add.text(PLAYFIELD_WIDTH / 2, PLAYFIELD_HEIGHT / 2, '游戏结束\n按 SPACE 键重新开始\n按 M 键返回菜单', {
             fontFamily: '"Fredoka", "Comic Sans MS", "Arial Rounded MT Bold", sans-serif',
             fontSize: '48px',
             color: '#ff6b81',
@@ -176,6 +187,13 @@ export class Game extends Phaser.Scene {
         if (event.code === 'Space') {
             if (this.state === GameState.Dead || this.state === GameState.Win) {
                 this.resetGame();
+            }
+            return;
+        }
+
+        if (event.code === 'KeyM' || event.code === 'Escape') {
+            if (this.state === GameState.Dead || this.state === GameState.Win) {
+                this.returnToMenu();
             }
             return;
         }
@@ -309,9 +327,9 @@ export class Game extends Phaser.Scene {
         }
         this.state = GameState.Dead;
         if (reason) {
-            this.gameOverText.setText(`${reason}\n按 SPACE 键重新开始`);
+            this.gameOverText.setText(`${reason}\n按 SPACE 键重新开始\n按 M 键返回菜单`);
         } else {
-            this.gameOverText.setText('游戏结束\n按 SPACE 键重新开始');
+            this.gameOverText.setText('游戏结束\n按 SPACE 键重新开始\n按 M 键返回菜单');
         }
         this.gameOverText.setVisible(true);
         if (this.score > this.bestScore) {
@@ -326,7 +344,7 @@ export class Game extends Phaser.Scene {
             return;
         }
         this.state = GameState.Win;
-        this.gameOverText.setText('全部完成！\n按 SPACE 键重新开始');
+        this.gameOverText.setText('全部完成！\n按 SPACE 键重新开始\n按 M 键返回菜单');
         this.gameOverText.setVisible(true);
         if (this.score > this.bestScore) {
             this.bestScore = this.score;
@@ -521,9 +539,11 @@ export class Game extends Phaser.Scene {
         const lineProgress = this.sequence.getLineProgress();
 
         const lines: string[] = [];
-        lines.push(`难度：${difficultyInfo.label}｜${difficultyInfo.description}`);
-        lines.push(this.sequence.summary);
-        lines.push(`得分：${consumed}${total > 0 ? ` / ${total}` : ''}（历史最佳：${this.bestScore}）`);
+        lines.push(`难度：${difficultyInfo.label}`);
+        lines.push(`模式：${difficultyInfo.description}`);
+        lines.push(`诗词：${this.sequence.summary}`);
+        lines.push(`得分：${consumed}${total > 0 ? ` / ${total}` : ''}`);
+        lines.push(`最佳：${this.bestScore}`);
         if (lineProgress) {
             lines.push(lineProgress);
         }
@@ -536,9 +556,18 @@ export class Game extends Phaser.Scene {
     private updateScoreLayout(): void {
         const width = this.scoreText.displayWidth;
         const height = this.scoreText.displayHeight;
-        const x = Math.floor(PLAYFIELD_PADDING_X + (GAME_WIDTH - width) / 2);
+        const x = Math.min(
+            PLAYFIELD_PADDING_X + GAME_WIDTH + 24,
+            PLAYFIELD_WIDTH - width - 16
+        );
         const y = Math.max(16, Math.floor(PLAYFIELD_PADDING_Y - height - 16));
         this.scoreText.setPosition(x, y);
+    }
+
+    private returnToMenu(): void {
+        this.stepEvent?.destroy();
+        this.stepEvent = undefined;
+        this.scene.start('MainMenu');
     }
 
     private loadBestScore(): number {
