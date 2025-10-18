@@ -48,6 +48,8 @@ export class Game extends Phaser.Scene {
     private beanLabels: Phaser.GameObjects.Text[] = [];
     private scoreText!: Phaser.GameObjects.Text;
     private gameOverText!: Phaser.GameObjects.Text;
+    private restartButton!: Phaser.GameObjects.Text;
+    private menuButton!: Phaser.GameObjects.Text;
     private stepEvent?: Phaser.Time.TimerEvent;
 
     private snake: Cell[] = [];
@@ -63,6 +65,7 @@ export class Game extends Phaser.Scene {
     private difficulty: DifficultyKey = 'easy';
     private sequence!: BeanSequence;
     private bestScoreKey = `${BEST_SCORE_KEY_PREFIX}-easy`;
+    private selectedPoem?: PoemDefinition;
 
     constructor() {
         super('Game');
@@ -75,15 +78,19 @@ export class Game extends Phaser.Scene {
 
         const poems = loadPoemsFromCache(this, this.difficulty);
         const pool = poems.length > 0 ? poems : [FALLBACK_POEM];
+        if (this.selectedPoem) {
+            return new PoemSequence(this.difficulty, this.selectedPoem);
+        }
         const index = this.rng.between(0, pool.length - 1);
         return new PoemSequence(this.difficulty, pool[index]);
     }
 
-    public init(data: { difficulty?: DifficultyKey } = {}): void {
+    public init(data: { difficulty?: DifficultyKey; poem?: PoemDefinition } = {}): void {
         this.rng = new Phaser.Math.RandomDataGenerator([Date.now().toString()]);
         const registryDifficulty = this.registry.get('difficulty') as DifficultyKey | undefined;
         this.difficulty = data?.difficulty ?? registryDifficulty ?? 'easy';
         this.registry.set('difficulty', this.difficulty);
+        this.selectedPoem = data?.poem;
         this.sequence = this.createSequence();
         this.bestScoreKey = `${BEST_SCORE_KEY_PREFIX}-${this.difficulty}`;
         this.bestScore = this.loadBestScore();
@@ -105,8 +112,9 @@ export class Game extends Phaser.Scene {
         this.scoreText.setBackgroundColor('rgba(255,255,255,0.85)');
         this.scoreText.setShadow(2, 2, 'rgba(154, 208, 245, 0.6)', 0, true, true);
         this.scoreText.setDepth(5);
+        this.scoreText.setStyle({ wordWrap: { width: 220, useAdvancedWrap: true } });
 
-        this.gameOverText = this.add.text(PLAYFIELD_WIDTH / 2, PLAYFIELD_HEIGHT / 2, '游戏结束\n按 SPACE 键重新开始', {
+        this.gameOverText = this.add.text(PLAYFIELD_WIDTH / 2, PLAYFIELD_HEIGHT / 2 - 120, '', {
             fontFamily: '"Fredoka", "Comic Sans MS", "Arial Rounded MT Bold", sans-serif',
             fontSize: '48px',
             color: '#ff6b81',
@@ -118,6 +126,18 @@ export class Game extends Phaser.Scene {
         this.gameOverText.setStroke('#ffe3e3', 6);
         this.gameOverText.setShadow(3, 3, 'rgba(255, 166, 201, 0.5)', 0, true, true);
         this.gameOverText.setVisible(false);
+
+        this.restartButton = this.createOverlayButton(PLAYFIELD_WIDTH / 2, PLAYFIELD_HEIGHT / 2 + 20, '重新开始', () => {
+            if (this.state === GameState.Dead || this.state === GameState.Win) {
+                this.resetGame();
+            }
+        });
+
+        this.menuButton = this.createOverlayButton(PLAYFIELD_WIDTH / 2, PLAYFIELD_HEIGHT / 2 + 110, '返回菜单', () => {
+            if (this.state === GameState.Dead || this.state === GameState.Win) {
+                this.returnToMenu();
+            }
+        });
 
         const keyboard = this.input.keyboard;
         keyboard?.on('keydown', this.handleKeyDown, this);
@@ -145,7 +165,7 @@ export class Game extends Phaser.Scene {
 
     private resetGame(): void {
         this.state = GameState.Running;
-        this.gameOverText.setVisible(false);
+        this.setOverlayVisible(false);
         this.snake = [];
         this.directionQueue = [];
         this.occupancy.clear();
@@ -176,6 +196,13 @@ export class Game extends Phaser.Scene {
         if (event.code === 'Space') {
             if (this.state === GameState.Dead || this.state === GameState.Win) {
                 this.resetGame();
+            }
+            return;
+        }
+
+        if (event.code === 'KeyM' || event.code === 'Escape') {
+            if (this.state === GameState.Dead || this.state === GameState.Win) {
+                this.returnToMenu();
             }
             return;
         }
@@ -308,12 +335,8 @@ export class Game extends Phaser.Scene {
             return;
         }
         this.state = GameState.Dead;
-        if (reason) {
-            this.gameOverText.setText(`${reason}\n按 SPACE 键重新开始`);
-        } else {
-            this.gameOverText.setText('游戏结束\n按 SPACE 键重新开始');
-        }
-        this.gameOverText.setVisible(true);
+        const message = reason ? ['游戏结束', reason] : ['游戏结束'];
+        this.showGameOverMessage(message);
         if (this.score > this.bestScore) {
             this.bestScore = this.score;
             this.saveBestScore(this.bestScore);
@@ -326,8 +349,7 @@ export class Game extends Phaser.Scene {
             return;
         }
         this.state = GameState.Win;
-        this.gameOverText.setText('全部完成！\n按 SPACE 键重新开始');
-        this.gameOverText.setVisible(true);
+        this.showGameOverMessage(['全部完成！']);
         if (this.score > this.bestScore) {
             this.bestScore = this.score;
             this.saveBestScore(this.bestScore);
@@ -534,11 +556,57 @@ export class Game extends Phaser.Scene {
     }
 
     private updateScoreLayout(): void {
-        const width = this.scoreText.displayWidth;
-        const height = this.scoreText.displayHeight;
-        const x = Math.floor(PLAYFIELD_PADDING_X + (GAME_WIDTH - width) / 2);
-        const y = Math.max(16, Math.floor(PLAYFIELD_PADDING_Y - height - 16));
+        const x = PLAYFIELD_PADDING_X + GAME_WIDTH + 24;
+        const y = PLAYFIELD_PADDING_Y;
         this.scoreText.setPosition(x, y);
+    }
+
+    private createOverlayButton(x: number, y: number, label: string, handler: () => void): Phaser.GameObjects.Text {
+        const button = this.add.text(x, y, label, {
+            fontFamily: '"Fredoka", "Comic Sans MS", "Arial Rounded MT Bold", sans-serif',
+            fontSize: '36px',
+            color: '#ffffff',
+            align: 'center',
+            backgroundColor: '#ff8c69'
+        });
+        button.setOrigin(0.5);
+        button.setPadding(32, 16, 32, 16);
+        button.setDepth(7);
+        button.setStroke('#ffced6', 6);
+        button.setShadow(3, 3, 'rgba(255, 166, 201, 0.5)', 0, true, true);
+        button.setInteractive({ useHandCursor: true });
+        button.on('pointerdown', handler);
+        button.on('pointerover', () => button.setStyle({ backgroundColor: '#ffad86' }));
+        button.on('pointerout', () => button.setStyle({ backgroundColor: '#ff8c69' }));
+        button.setVisible(false);
+        button.setActive(false);
+        button.disableInteractive();
+        return button;
+    }
+
+    private setOverlayVisible(visible: boolean): void {
+        this.gameOverText.setVisible(visible);
+        this.restartButton.setVisible(visible);
+        this.menuButton.setVisible(visible);
+        this.restartButton.setActive(visible);
+        this.menuButton.setActive(visible);
+        if (visible) {
+            this.restartButton.setInteractive({ useHandCursor: true });
+            this.menuButton.setInteractive({ useHandCursor: true });
+        } else {
+            this.restartButton.disableInteractive();
+            this.menuButton.disableInteractive();
+        }
+    }
+
+    private showGameOverMessage(lines: string[]): void {
+        const messageLines = [...lines, '按 SPACE 键重新开始', '按 M 键返回菜单'];
+        this.gameOverText.setText(messageLines.join('\n'));
+        this.setOverlayVisible(true);
+    }
+
+    private returnToMenu(): void {
+        this.scene.start('MainMenu');
     }
 
     private loadBestScore(): number {
