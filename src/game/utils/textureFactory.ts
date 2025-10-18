@@ -6,11 +6,10 @@ import {
     GRID_HEIGHT,
     GRID_WIDTH,
     PLAYFIELD_HEIGHT,
+    PLAYFIELD_PADDING_X,
+    PLAYFIELD_PADDING_Y,
     PLAYFIELD_WIDTH
 } from '../constants';
-
-const PANEL_PADDING_X = Math.floor((PLAYFIELD_WIDTH - GAME_WIDTH) / 2);
-const PANEL_PADDING_Y = Math.floor((PLAYFIELD_HEIGHT - GAME_HEIGHT) / 2);
 
 export function createGameTextures(scene: Phaser.Scene): void {
     createPlayfieldTexture(scene);
@@ -31,24 +30,24 @@ function createPlayfieldTexture(scene: Phaser.Scene): void {
     ctx.fillStyle = '#d4f0ff';
     ctx.fillRect(0, 0, PLAYFIELD_WIDTH, PLAYFIELD_HEIGHT);
 
-    drawRoundedRect(ctx, PANEL_PADDING_X - 24, PANEL_PADDING_Y - 24, GAME_WIDTH + 48, GAME_HEIGHT + 48, 48, '#ffffff', '#9dd7ff', 6);
-    drawRoundedRect(ctx, PANEL_PADDING_X, PANEL_PADDING_Y, GAME_WIDTH, GAME_HEIGHT, 36, '#f8fbff', '#7ec9ff', 4);
+    drawRoundedRect(ctx, PLAYFIELD_PADDING_X - 24, PLAYFIELD_PADDING_Y - 24, GAME_WIDTH + 48, GAME_HEIGHT + 48, 48, '#ffffff', '#9dd7ff', 6);
+    drawRoundedRect(ctx, PLAYFIELD_PADDING_X, PLAYFIELD_PADDING_Y, GAME_WIDTH, GAME_HEIGHT, 36, '#f8fbff', '#7ec9ff', 4);
 
     ctx.strokeStyle = 'rgba(126, 201, 255, 0.35)';
     ctx.lineWidth = 2;
     for (let gx = 1; gx < GRID_WIDTH; gx += 1) {
-        const x = PANEL_PADDING_X + gx * CELL_SIZE;
+        const x = PLAYFIELD_PADDING_X + gx * CELL_SIZE;
         ctx.beginPath();
-        ctx.moveTo(x, PANEL_PADDING_Y + 8);
-        ctx.lineTo(x, PANEL_PADDING_Y + GAME_HEIGHT - 8);
+        ctx.moveTo(x, PLAYFIELD_PADDING_Y + 8);
+        ctx.lineTo(x, PLAYFIELD_PADDING_Y + GAME_HEIGHT - 8);
         ctx.stroke();
     }
 
     for (let gy = 1; gy < GRID_HEIGHT; gy += 1) {
-        const y = PANEL_PADDING_Y + gy * CELL_SIZE;
+        const y = PLAYFIELD_PADDING_Y + gy * CELL_SIZE;
         ctx.beginPath();
-        ctx.moveTo(PANEL_PADDING_X + 8, y);
-        ctx.lineTo(PANEL_PADDING_X + GAME_WIDTH - 8, y);
+        ctx.moveTo(PLAYFIELD_PADDING_X + 8, y);
+        ctx.lineTo(PLAYFIELD_PADDING_X + GAME_WIDTH - 8, y);
         ctx.stroke();
     }
 
