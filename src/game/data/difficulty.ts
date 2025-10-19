@@ -18,19 +18,19 @@ const difficultyDetails: Record<DifficultyKey, DifficultyInfo> = {
         key: 'easy',
         label: '简单',
         description: '五言古诗练习',
-        dataPath: 'poems/easy.csv'
+        dataPath: 'poems/easy/index.json'
     },
     medium: {
         key: 'medium',
         label: '中等',
         description: '七言古诗挑战',
-        dataPath: 'poems/medium.csv'
+        dataPath: 'poems/medium/index.json'
     },
     hard: {
         key: 'hard',
         label: '困难',
         description: '多句长篇诗词',
-        dataPath: 'poems/hard.csv'
+        dataPath: 'poems/hard/index.json'
     }
 };
 

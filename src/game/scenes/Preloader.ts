@@ -1,6 +1,5 @@
 import { Scene } from 'phaser';
-import { DIFFICULTY_ORDER, getDifficultyDataPath } from '../data/difficulty';
-import { getPoemCacheKey } from '../data/poems';
+import { preloadAllPoems } from '../data/poems';
 import { createGameTextures } from '../utils/textureFactory';
 
 export class Preloader extends Scene
@@ -37,17 +36,17 @@ export class Preloader extends Scene
 
         this.load.image('logo', 'logo.png');
 
-        DIFFICULTY_ORDER.forEach((difficulty) => {
-            const path = getDifficultyDataPath(difficulty);
-            if (path) {
-                this.load.text(getPoemCacheKey(difficulty), path);
-            }
-        });
+        // 诗词将在 create 阶段通过自定义加载逻辑读取
     }
 
-    create ()
+    async create (): Promise<void>
     {
         createGameTextures(this);
+        try {
+            await preloadAllPoems(this);
+        } catch (error) {
+            console.warn('[preloader] 诗词资源预加载失败', error);
+        }
         //  When all the assets have loaded, it's often worth creating global objects here that the rest of the game can use.
         //  For example, you can define global animations here, so we can use them in other scenes.
 
