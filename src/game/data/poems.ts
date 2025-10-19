@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { DifficultyKey, getDifficultyDataPath } from './difficulty';
+import { DIFFICULTY_ORDER, DifficultyKey, getDifficultyDataPath } from './difficulty';
 
 export type PoemMeter = 5 | 7;
 
@@ -11,99 +11,167 @@ export interface PoemDefinition {
     lines: string[];
 }
 
+interface PoemMetadata {
+    title: string;
+    author?: string;
+    content: string;
+    meter?: number;
+}
+
+interface PoemIndexFile {
+    poems?: PoemMetadata[];
+}
+
 const PUNCTUATION_REGEXP = /[，,。\.！!？?、；;：:\-\s“”"'‘’()（）《》<>·…—\u3000]/g;
 
-export function loadPoemsFromCache(scene: Phaser.Scene, difficulty: DifficultyKey): PoemDefinition[] {
+const poemCache: Map<DifficultyKey, PoemDefinition[]> = new Map();
+const loadingCache: Map<DifficultyKey, Promise<PoemDefinition[]>> = new Map();
+
+export function loadPoemsFromCache(_scene: Phaser.Scene, difficulty: DifficultyKey): PoemDefinition[] {
+    return poemCache.get(difficulty) ?? [];
+}
+
+export async function ensureAllPoemsLoaded(scene: Phaser.Scene): Promise<void> {
+    const tasks = DIFFICULTY_ORDER.map((difficulty) => ensurePoemsLoaded(scene, difficulty));
+    await Promise.all(tasks);
+}
+
+async function ensurePoemsLoaded(_scene: Phaser.Scene, difficulty: DifficultyKey): Promise<PoemDefinition[]> {
+    if (poemCache.has(difficulty)) {
+        return poemCache.get(difficulty)!;
+    }
+
+    const existingPromise = loadingCache.get(difficulty);
+    if (existingPromise) {
+        return existingPromise;
+    }
+
+    const promise = loadPoemsForDifficulty(_scene, difficulty)
+        .finally(() => {
+            loadingCache.delete(difficulty);
+        });
+    loadingCache.set(difficulty, promise);
+    return promise;
+}
+
+async function loadPoemsForDifficulty(_scene: Phaser.Scene, difficulty: DifficultyKey): Promise<PoemDefinition[]> {
     const dataPath = getDifficultyDataPath(difficulty);
     if (!dataPath) {
+        poemCache.set(difficulty, []);
         return [];
     }
 
-    const cacheKey = getPoemCacheKey(difficulty);
-    const raw = scene.cache.text.get(cacheKey) as string | undefined;
-    if (!raw) {
-        console.warn(`[poems] 未能在缓存中找到诗词数据：${cacheKey}`);
-        return [];
-    }
+    try {
+        const meta = await fetchPoemIndex(dataPath);
+        const basePath = extractBasePath(dataPath);
+        const poems = meta.poems ?? [];
+        const definitions: PoemDefinition[] = [];
+        let poemIndex = 0;
 
-    return parsePoemCsv(raw);
-}
+        for (const entry of poems) {
+            if (!entry.content) {
+                console.warn(`[poems] 诗词内容路径缺失：${entry.title ?? '未命名'}`);
+                continue;
+            }
 
-export function getPoemCacheKey(difficulty: DifficultyKey): string {
-    return `poems-${difficulty}`;
-}
+            const contentPath = resolveContentPath(basePath, entry.content);
+            try {
+                const text = await fetchPoemText(contentPath);
+                const lines = parsePoemText(text);
+                if (lines.length === 0) {
+                    continue;
+                }
 
-export function parsePoemCsv(raw: string): PoemDefinition[] {
-    const lines = raw.replace(/\ufeff/g, '').split(/\r?\n/).map((line) => line.trim());
-    if (lines.length === 0) {
-        return [];
-    }
-
-    const result: PoemDefinition[] = [];
-
-    let startIndex = 0;
-    if (lines.length > 0 && lines[0].toLowerCase().startsWith('title')) {
-        startIndex = 1;
-    }
-
-    let poemIndex = 0;
-
-    for (let index = startIndex; index < lines.length; index += 1) {
-        const line = lines[index];
-        if (!line || line.startsWith('#')) {
-            continue;
-        }
-
-        const values = parseCsvLine(line);
-        if (values.length < 4) {
-            continue;
-        }
-
-        const [title, authorOrMeter, maybeMeter, ...content] = values;
-        let author = '';
-        let meterValue: number | null = null;
-        let lineValues: string[] = [];
-
-        if (isMeter(authorOrMeter)) {
-            meterValue = Number.parseInt(authorOrMeter, 10);
-            lineValues = [maybeMeter, ...content];
-        } else {
-            author = authorOrMeter;
-            if (isMeter(maybeMeter)) {
-                meterValue = Number.parseInt(maybeMeter, 10);
-                lineValues = content;
-            } else {
-                lineValues = [maybeMeter, ...content];
+                const meter = normalizeMeter(entry.meter, lines[0]);
+                const id = createPoemId(entry.title, entry.author, poemIndex);
+                poemIndex += 1;
+                definitions.push({
+                    id,
+                    title: entry.title || '未命名',
+                    author: entry.author || undefined,
+                    meter,
+                    lines
+                });
+            } catch (error) {
+                console.warn(`[poems] 读取诗词内容失败：${contentPath}`, error);
             }
         }
 
-        if (!meterValue) {
-            const inferred = inferMeterFromLine(lineValues[0]);
-            meterValue = inferred ?? 5;
-        }
+        poemCache.set(difficulty, definitions);
+        return definitions;
+    } catch (error) {
+        console.warn(`[poems] 读取诗词索引失败：${dataPath}`, error);
+        poemCache.set(difficulty, []);
+        return [];
+    }
+}
 
-        const sanitizedLines = lineValues
-            .map((value) => value.trim())
-            .filter((value) => value.length > 0)
-            .map((value) => value.replace(/\s+/g, ''));
+async function fetchPoemIndex(path: string): Promise<PoemIndexFile> {
+    const response = await fetch(resolveAssetUrl(path));
+    if (!response.ok) {
+        throw new Error(`Failed to fetch poem index: ${response.status}`);
+    }
+    return response.json();
+}
 
-        if (sanitizedLines.length === 0) {
-            continue;
-        }
+async function fetchPoemText(path: string): Promise<string> {
+    const response = await fetch(resolveAssetUrl(path));
+    if (!response.ok) {
+        throw new Error(`Failed to fetch poem content: ${response.status}`);
+    }
+    return response.text();
+}
 
-        const id = createPoemId(title, author, poemIndex);
-        poemIndex += 1;
-
-        result.push({
-            id,
-            title: title || '未命名',
-            author: author || undefined,
-            meter: (meterValue === 7 ? 7 : 5),
-            lines: sanitizedLines
-        });
+function resolveAssetUrl(path: string): string {
+    if (/^https?:\/\//.test(path)) {
+        return path;
     }
 
-    return result;
+    if (path.startsWith('/')) {
+        return path;
+    }
+
+    const normalizedPath = path.replace(/^\/+/, '');
+    const base = (import.meta.env.BASE_URL ?? '/');
+    const normalizedBase = base.endsWith('/') ? base : `${base}/`;
+    return `${normalizedBase}assets/${normalizedPath}`;
+}
+
+function extractBasePath(path: string): string {
+    const index = path.lastIndexOf('/');
+    if (index === -1) {
+        return '';
+    }
+    return path.slice(0, index + 1);
+}
+
+function resolveContentPath(basePath: string, content: string): string {
+    if (!content) {
+        return basePath;
+    }
+
+    if (/^https?:\/\//.test(content) || content.startsWith('/')) {
+        return content;
+    }
+
+    return `${basePath}${content}`;
+}
+
+function parsePoemText(raw: string): string[] {
+    return raw
+        .replace(/\ufeff/g, '')
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0)
+        .map((line) => line.replace(/\s+/g, ''));
+}
+
+function normalizeMeter(meter: number | undefined, firstLine: string | undefined): PoemMeter {
+    if (meter === 5 || meter === 7) {
+        return meter;
+    }
+    const inferred = inferMeterFromLine(firstLine);
+    return inferred ?? 5;
 }
 
 function createPoemId(title: string, author: string | undefined, index: number): string {
@@ -122,44 +190,6 @@ function sanitizeIdentifier(raw: string): string {
         .replace(/-+/g, '-')
         .replace(/^-|-$/g, '')
         .toLowerCase() || 'unknown';
-}
-
-function parseCsvLine(line: string): string[] {
-    const values: string[] = [];
-    let current = '';
-    let inQuotes = false;
-
-    for (let i = 0; i < line.length; i += 1) {
-        const char = line[i];
-
-        if (char === '"') {
-            if (inQuotes && line[i + 1] === '"') {
-                current += '"';
-                i += 1;
-            } else {
-                inQuotes = !inQuotes;
-            }
-            continue;
-        }
-
-        if (char === ',' && !inQuotes) {
-            values.push(current.trim());
-            current = '';
-            continue;
-        }
-
-        current += char;
-    }
-
-    if (current.length > 0 || line.endsWith(',')) {
-        values.push(current.trim());
-    }
-
-    return values;
-}
-
-function isMeter(value: string | undefined): value is '5' | '7' {
-    return value === '5' || value === '7';
 }
 
 function inferMeterFromLine(line: string | undefined): PoemMeter | null {
@@ -185,4 +215,12 @@ export function extractCharacters(line: string, meter: PoemMeter): string[] {
         return characters;
     }
     return characters;
+}
+
+export async function preloadPoems(scene: Phaser.Scene, difficulty: DifficultyKey): Promise<void> {
+    await ensurePoemsLoaded(scene, difficulty);
+}
+
+export async function preloadAllPoems(scene: Phaser.Scene): Promise<void> {
+    await ensureAllPoemsLoaded(scene);
 }
