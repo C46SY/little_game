@@ -1,3 +1,16 @@
 {
-  "poems": []
+  "poems": [
+    {
+      "author": "曹操",
+      "title": "短歌行",
+      "content": "duange-xing.txt",
+      "meter": 7
+    },
+    {
+      "author": "白居易",
+      "title": "长恨歌",
+      "content": "changhen-ge.txt",
+      "meter": 7
+    }
+  ]
 }

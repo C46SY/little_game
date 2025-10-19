@@ -1,3 +1,16 @@
 {
-  "poems": []
+  "poems": [
+    {
+      "author": "李商隐",
+      "title": "夜雨寄北",
+      "content": "yeyu-jibei.txt",
+      "meter": 5
+    },
+    {
+      "author": "李商隐",
+      "title": "乐游原",
+      "content": "leyou-yuan.txt",
+      "meter": 5
+    }
+  ]
 }
